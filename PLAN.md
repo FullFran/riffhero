@@ -31,15 +31,20 @@ If a feature does not improve that loop, it is not MVP.
 
 Goal: validate that the UI/game loop and domain clock are boring and deterministic.
 
-- [ ] Ebitengine window.
-- [ ] `practice.Frame` type and sample-rate conversion.
-- [ ] Synthetic score of ~20 notes.
-- [ ] Moving playhead / scrolling tab mock.
-- [ ] Fake detector producing note events.
-- [ ] Perfect / Good / Miss matcher.
-- [ ] Unit tests around timing windows.
+- [x] Ebitengine window.
+- [x] `practice.Frame` type and sample-rate conversion.
+- [x] Synthetic score of ~20 notes.
+- [x] Moving playhead / scrolling tab mock.
+- [x] Fake detector producing note events.
+- [x] Perfect / Good / Miss matcher.
+- [x] Unit tests around timing windows.
 
 Exit criterion: a synthetic note stream can score a synthetic song deterministically.
+
+Status: met. `TestPhase0ExitCriterion` drives transport + scripted detector +
+session end to end and asserts the same scoreboard on two identical runs. The
+domain and the layout math are hardware-free; only `cmd/riffhero` needs a
+display.
 
 ---
 

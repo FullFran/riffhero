@@ -14,30 +14,57 @@ Do not broaden scope before this loop works.
 
 ## Current state
 
-Initialized:
+Phase 0 is complete. `internal/practice` and `internal/ui` build and test with
+no display and no audio device:
 
-- Go module targeting Go 1.26.
-- Ebitengine as the UI dependency.
-- sample-frame time model;
+- sample-frame time model (`Frame`, `Clock`);
 - normalized note/event model;
-- deterministic single-note matcher;
-- matcher unit tests;
-- minimal Ebitengine window scaffold;
-- architecture and phased implementation plan.
+- synthetic 20-note score generated from the clock (`SyntheticSong`);
+- frame-driven `Transport` (play/pause/seek/restart, clamped at the song end);
+- `ScriptedDetector` + `Perform` to simulate a player from a deviation plan;
+- `Session`: resolves each expected note exactly once, expires late notes as
+  Miss, tracks Perfect/Good/Miss, combo and accuracy;
+- headless `ui.Layout` mapping frames and strings to screen coordinates;
+- Ebitengine view wiring all of the above, with a scrolling tab and HUD.
 
-## First implementation session
+Scoring rules worth knowing:
 
-Complete Phase 0 from `PLAN.md`:
+- a detection with the wrong pitch or bad intonation consumes nothing, so the
+  player can still rescue the note inside its window;
+- a detection is assigned to the *nearest* unresolved note it can legitimately
+  hit, not the first one;
+- a note expires as Miss once the playhead passes `Start + Good`;
+- accuracy is `(Perfect + Good) / resolved`.
 
-1. Create a synthetic 20-note guitar phrase in `internal/practice`.
-2. Add a deterministic transport driven by sample frames.
-3. Add a fake detector that emits note events at configurable offsets.
-4. Match each emitted note once; avoid double scoring.
-5. Render six strings, moving expected notes, playhead, latest rating, accuracy and combo.
-6. Add tests for early/late boundary conditions and duplicate detections.
-7. Keep the domain runnable/testable without Ebitengine.
+### Known local blocker
 
-Do **not** add malgo/audio capture yet. Phase 0 must be deterministic before hardware enters the system.
+`go build ./cmd/riffhero` fails on this machine with
+`fatal error: X11/Xlib.h: No such file or directory`. This is a missing system
+dependency, not a code problem — Ebitengine needs the X11/GL development
+headers:
+
+```bash
+sudo apt install libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
+    libxi-dev libxxf86vm-dev libgl1-mesa-dev
+```
+
+The domain and layout packages are unaffected: `go test ./internal/...` passes.
+
+## Next implementation session
+
+Phase 1 from `PLAN.md`: real guitar input.
+
+1. Install the X11/GL headers above and run `go run ./cmd/riffhero` once, to
+   confirm the Phase 0 view on a real display.
+2. Evaluate `gen2brain/malgo` duplex capture and measure latency on PipeWire.
+3. Add a bounded SPSC ring buffer written only by the audio callback.
+4. RMS gate + onset detector outside the callback.
+5. MPM as the primary pitch estimator, YIN as a cross-check.
+6. Feed the resulting `DetectedNote` values into the existing `Session` — the
+   scoring side needs no changes; only the source of detections does.
+
+The real detector must satisfy the same `practice.Detector` interface that
+`ScriptedDetector` already implements, so Phase 0 tests stay the regression net.
 
 ## Reference project to inspect
 
