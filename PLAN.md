@@ -60,21 +60,40 @@ Audio backend:
 
 DSP:
 
-- [ ] lock-free or bounded SPSC ring buffer;
-- [ ] RMS/energy gate;
-- [ ] onset detector;
-- [ ] McLeod Pitch Method (primary);
-- [ ] YIN/YIN-FFT cross-check;
-- [ ] confidence + cents error;
-- [ ] stable note tracker to avoid frame-by-frame jitter.
+- [x] lock-free or bounded SPSC ring buffer;
+- [x] RMS/energy gate;
+- [x] onset detector;
+- [x] McLeod Pitch Method (primary);
+- [x] YIN/YIN-FFT cross-check;
+- [x] confidence + cents error;
+- [x] stable note tracker to avoid frame-by-frame jitter.
 
 Tests:
 
-- generated sine waves E2..E6;
-- harmonically rich synthetic guitar-like tones;
-- recorded DI fixtures later.
+- [x] generated sine waves E2..E6;
+- [x] harmonically rich synthetic guitar-like tones;
+- [ ] recorded DI fixtures later.
 
 Exit criterion: stable monophonic detection over normal guitar range with useful latency.
+
+Status: the DSP half is met, in `internal/dsp`, with no audio device involved.
+`Detector` implements `practice.Detector`, so Phase 0's scoring is unchanged and
+still acts as the regression net —
+`TestDetectorFeedsTheScoringSession` scores synthetic audio through the real
+`Session`.
+
+Measured on the development machine:
+
+| Property | Value |
+| --- | --- |
+| Analysis latency, attack to emitted note | 65 ms |
+| CPU per second of audio, whole chain | 19 ms (about 50x faster than real time) |
+| Allocations per pitch estimate | 0 |
+| Detection range | 70 Hz – 1400 Hz (below E2, above E6) |
+
+The audio backend is what remains: `malgo`/miniaudio duplex capture, device
+selection, and measuring the round-trip latency that `Detector.LatencyOffset`
+exists to correct.
 
 ---
 

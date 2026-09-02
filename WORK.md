@@ -14,8 +14,10 @@ Do not broaden scope before this loop works.
 
 ## Current state
 
-Phase 0 is complete. `internal/practice` and `internal/ui` build and test with
-no display and no audio device:
+Phase 0 is complete and Phase 1's DSP is complete. Everything below builds and
+tests with no display and no audio device.
+
+`internal/practice` — the domain:
 
 - sample-frame time model (`Frame`, `Clock`);
 - normalized note/event model;
@@ -27,6 +29,21 @@ no display and no audio device:
 - headless `ui.Layout` mapping frames and strings to screen coordinates;
 - Ebitengine view wiring all of the above, with a scrolling tab and HUD.
 
+`internal/dsp` — real audio to notes, no hardware yet:
+
+- `Ring`: bounded SPSC queue; the audio callback's only job is to copy into it,
+  and a full ring drops rather than blocks;
+- `Gate`: RMS gate with hysteresis, so a decaying note does not chatter it;
+- `Onset`: energy-rise detector that back-dates an onset to where the rise
+  began;
+- `MPM`: McLeod Pitch Method, the primary estimator;
+- `YIN`: independent cross-check; agreement raises confidence, disagreement
+  halves it;
+- `Tracker`: onset-driven note assembly, requiring a quorum of windows to agree
+  before a note exists;
+- `Detector`: implements `practice.Detector`, so real detections drop straight
+  into the Phase 0 `Session`.
+
 Scoring rules worth knowing:
 
 - a detection with the wrong pitch or bad intonation consumes nothing, so the
@@ -36,11 +53,48 @@ Scoring rules worth knowing:
 - a note expires as Miss once the playhead passes `Start + Good`;
 - accuracy is `(Perfect + Good) / resolved`.
 
+DSP decisions worth knowing, because each one was a bug first:
+
+- onset detection compares against the *minimum* of the recent hops, not their
+  average. On a guitar the previous note is still ringing when the next is
+  struck, so energy adds instead of replacing, and an average is dragged up
+  until it swallows the attack;
+- the envelope behind that rule is measured over four hops, not one. A
+  256-sample hop holds half a cycle of the low E, so its RMS tracks the phase
+  of the waveform rather than its loudness, and a minimum-based rule reads that
+  swing as an attack several times per note;
+- MPM's search for the first key maximum starts at lag zero, not at the minimum
+  lag of the pitch range. At the top of the range the minimum lag falls inside
+  the first hump of the NSDF, and starting there skips the true peak and
+  returns the octave below it;
+- `Detector.Write` must be paired with regular `Poll` calls. The ring holds
+  about 0.7 s; dumping more than that without polling drops samples, and
+  `Detector.Dropped()` is how that gets noticed;
+- nothing in the chain may judge level on a single hop. The gate used to, and
+  it vetoed onsets: a low E whose first hop happened to land on a quiet part of
+  its own waveform was discarded, and because the onset had already started its
+  refractory window the attack could not fire again. The same note was heard on
+  one take and ignored on the next. The gate now reads `Onset.Level`, the
+  shared multi-hop envelope, and no longer vetoes anything — the onset's own
+  floor is the single authority on "too quiet to be a note";
+- a dropped sample is a hole in the timeline, not just lost audio. The tracker
+  counts what it reads and the game counts what elapsed, so one ring overflow
+  used to shift every later detection earlier for the rest of the run and turn
+  the whole song into misses. `Poll` now feeds the gap to `Tracker.Skip`;
+- windows where MPM and YIN disagreed do not count as ordinary evidence. A
+  semitone supported only by disputed windows must be unanimous before it is
+  believed, which is the only thing that makes the cross-check change an
+  outcome rather than just a number;
+- the quorum tie-break is explicit (support, then clarity, then lowest pitch).
+  Ranking by map iteration alone would pass locally and flake in CI.
+
 ### Building and running
 
-`make check` covers vet + tests and needs nothing but Go. `make run` builds
-`cmd/riffhero` and launches it; that step needs the X11/GL development headers,
-which `make deps` prints the install line for.
+`make check` covers vet + tests for `internal/...` and needs nothing but Go —
+every test in the repo lives there and is hardware-free. `make build` and
+`make run` compile `cmd/riffhero`, which needs the X11/GL development headers
+that `make deps` prints the install line for; `make check-app` vets that
+package too.
 
 Two environment traps cost a session once, both outside the code:
 
@@ -63,17 +117,29 @@ runs, and the scripted performance scores 10 Perfect / 5 Good / 5 Miss over the
 
 ## Next implementation session
 
-Phase 1 from `PLAN.md`: real guitar input.
+Finish Phase 1 by giving the DSP a real source, then move to Phase 2.
 
 1. Evaluate `gen2brain/malgo` duplex capture and measure latency on PipeWire.
-2. Add a bounded SPSC ring buffer written only by the audio callback.
-3. RMS gate + onset detector outside the callback.
-4. MPM as the primary pitch estimator, YIN as a cross-check.
-5. Feed the resulting `DetectedNote` values into the existing `Session` — the
-   scoring side needs no changes; only the source of detections does.
+   It is the first third-party dependency in the project, so weigh it against
+   raw ALSA before committing.
+2. Wire the capture callback to `dsp.Detector.Write` and nothing else — no
+   analysis on the callback thread.
+3. Add device selection, and surface `Detector.Dropped()` in the UI, because a
+   silent drop looks exactly like a player missing notes.
+4. Measure round-trip latency and store it in `Detector.LatencyOffset`.
+5. Replace `ScriptedDetector` in `cmd/riffhero` with `dsp.Detector` behind a
+   flag, so the scripted path stays available for testing without a guitar.
 
-The real detector must satisfy the same `practice.Detector` interface that
-`ScriptedDetector` already implements, so Phase 0 tests stay the regression net.
+Known limits to revisit rather than forget:
+
+- 65 ms of analysis latency, dominated by the 2048-sample window the low E
+  needs. A shorter window for higher notes would cut it, but only if the
+  practice loop actually feels slow.
+- Monophonic only. Two strings ringing together will not resolve; that is
+  Phase 5, and the tracker's quorum rule makes it fail silently rather than
+  emit a wrong note.
+- The synthetic `pluck` fixtures are a model of a string, not a recording. DI
+  fixtures are the honest next test.
 
 ## Reference project to inspect
 
