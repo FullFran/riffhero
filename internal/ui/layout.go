@@ -67,3 +67,33 @@ func (l Layout) framesForPixels(px float64) practice.Frame {
 	}
 	return practice.Frame(math.Ceil(px / l.PixelsPerSecond * float64(l.clock.SampleRate)))
 }
+
+// LoopBounds is the on-screen span of an A-B region, so the view can shade it.
+// visible is false when the region is entirely off screen.
+func (l Layout) LoopBounds(now practice.Frame, loop practice.Loop) (x1, x2 float64, visible bool) {
+	if !loop.Active() {
+		return 0, 0, false
+	}
+	x1, x2 = l.NoteX(now, loop.A), l.NoteX(now, loop.B)
+	if x2 < 0 || x1 > l.Width {
+		return 0, 0, false
+	}
+	return x1, x2, true
+}
+
+// VisibleBars returns the bars that intersect the screen at this playhead
+// position, for drawing bar lines and numbers.
+func (l Layout) VisibleBars(now practice.Frame, grid practice.Grid) []practice.Bar {
+	from, to := l.VisibleWindow(now)
+	var out []practice.Bar
+	for _, bar := range grid {
+		if bar.End < from {
+			continue
+		}
+		if bar.Start > to {
+			break
+		}
+		out = append(out, bar)
+	}
+	return out
+}
