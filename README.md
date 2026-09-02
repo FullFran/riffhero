@@ -41,9 +41,10 @@ accuracy 93%    combo x24    speed 0.75x
 ## Development
 
 ```bash
-make check   # vet + tests, no display or audio device needed
-make run     # build and launch the app
+make check   # vet + tests for internal/..., no display or audio device needed
 make deps    # print the system packages cmd/riffhero needs
+make build   # build the app (needs those packages)
+make run     # build and launch the app
 make help    # list every target
 ```
 
