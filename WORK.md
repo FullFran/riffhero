@@ -36,31 +36,40 @@ Scoring rules worth knowing:
 - a note expires as Miss once the playhead passes `Start + Good`;
 - accuracy is `(Perfect + Good) / resolved`.
 
-### Known local blocker
+### Building and running
 
-`go build ./cmd/riffhero` fails on this machine with
-`fatal error: X11/Xlib.h: No such file or directory`. This is a missing system
-dependency, not a code problem — Ebitengine needs the X11/GL development
-headers:
+`make check` covers vet + tests and needs nothing but Go. `make run` builds
+`cmd/riffhero` and launches it; that step needs the X11/GL development headers,
+which `make deps` prints the install line for.
 
-```bash
-sudo apt install libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
-    libxi-dev libxxf86vm-dev libgl1-mesa-dev
-```
+Two environment traps cost a session once, both outside the code:
 
-The domain and layout packages are unaffected: `go test ./internal/...` passes.
+1. Without the X11/GL headers the cgo build fails with
+   `fatal error: X11/Xlib.h: No such file or directory`. Install what
+   `make deps` prints.
+2. On a machine with Nix-based tooling in the shell, the binary builds but the
+   window never opens. Nix exports driver-discovery variables pointing at
+   `/nix/store` builds linked against a newer glibc than the system one:
+   `LD_LIBRARY_PATH` yields ``libGL.so: version `GLIBC_2.38' not found``, and
+   `__EGL_VENDOR_LIBRARY_FILENAMES` yields
+   `glfw: EGL: Failed to get EGL display`. The second is read by libglvnd on
+   its own, so clearing `LD_LIBRARY_PATH` alone does not help — Ebitengine
+   goes through EGL on Linux, not GLX. `scripts/with-system-gl.sh` clears both
+   plus the related driver paths, and `make run` goes through it.
+
+Phase 0 has been confirmed on a real display: the view renders, the transport
+runs, and the scripted performance scores 10 Perfect / 5 Good / 5 Miss over the
+20-note song, exactly as `performance()` in `cmd/riffhero/main.go` plans it.
 
 ## Next implementation session
 
 Phase 1 from `PLAN.md`: real guitar input.
 
-1. Install the X11/GL headers above and run `go run ./cmd/riffhero` once, to
-   confirm the Phase 0 view on a real display.
-2. Evaluate `gen2brain/malgo` duplex capture and measure latency on PipeWire.
-3. Add a bounded SPSC ring buffer written only by the audio callback.
-4. RMS gate + onset detector outside the callback.
-5. MPM as the primary pitch estimator, YIN as a cross-check.
-6. Feed the resulting `DetectedNote` values into the existing `Session` — the
+1. Evaluate `gen2brain/malgo` duplex capture and measure latency on PipeWire.
+2. Add a bounded SPSC ring buffer written only by the audio callback.
+3. RMS gate + onset detector outside the callback.
+4. MPM as the primary pitch estimator, YIN as a cross-check.
+5. Feed the resulting `DetectedNote` values into the existing `Session` — the
    scoring side needs no changes; only the source of detections does.
 
 The real detector must satisfy the same `practice.Detector` interface that

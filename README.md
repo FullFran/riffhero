@@ -41,8 +41,15 @@ accuracy 93%    combo x24    speed 0.75x
 ## Development
 
 ```bash
-go mod tidy
-go run ./cmd/riffhero
+make check   # vet + tests, no display or audio device needed
+make run     # build and launch the app
+make deps    # print the system packages cmd/riffhero needs
+make help    # list every target
 ```
+
+`make run` goes through `scripts/with-system-gl.sh`, which pins the app to the
+system OpenGL stack. Nix-based tooling in the shell otherwise redirects driver
+discovery at `/nix/store` builds linked against a newer glibc, and the window
+never opens.
 
 See [`PLAN.md`](PLAN.md) and [`docs/architecture.md`](docs/architecture.md).
