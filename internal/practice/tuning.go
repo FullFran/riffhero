@@ -1,5 +1,7 @@
 package practice
 
+import "strings"
+
 // MaxFret is the highest fret RiffHero will place a note on. Nothing on a
 // normal electric guitar goes past it, and bounding the search keeps position
 // resolution total.
@@ -128,6 +130,43 @@ func (f *Fretboard) PlaceOrTranspose(midi uint8) (placed, str, fret uint8, ok bo
 	str, fret, ok = f.Place(placed)
 	return placed, str, fret, ok
 }
+
+// knownTunings are the ones worth recognizing by name in a header.
+var knownTunings = []Tuning{StandardTuning, DropDTuning, HalfStepDown}
+
+// Named fills in a name for a tuning recovered from a file.
+//
+// An importer reading a tab staff knows the pitches and not what they are
+// called, and "Tab" in the header of a song in standard tuning tells the
+// player nothing the strings themselves do not. A tuning nobody has a word for
+// is spelled out low to high, the way a guitarist reads one off a headstock.
+func (t Tuning) Named() Tuning {
+	for _, known := range knownTunings {
+		if t.Strings == known.Strings {
+			t.Name = known.Name
+			return t
+		}
+	}
+
+	// A zero slot is a string the instrument does not have. The array is six
+	// long because a guitar is, and a four-string bass leaves the top two
+	// empty rather than inventing pitches for them.
+	names := make([]string, 0, len(t.Strings))
+	for i := len(t.Strings) - 1; i >= 0; i-- {
+		if t.Strings[i] == 0 {
+			continue
+		}
+		names = append(names, pitchClassNames[t.Strings[i]%12])
+	}
+	if len(names) == 0 {
+		t.Name = "Unknown"
+		return t
+	}
+	t.Name = strings.Join(names, " ")
+	return t
+}
+
+var pitchClassNames = [12]string{"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
 
 // Sounds reports whether a tab position produces the given pitch. Importers
 // that carry their own tablature use it to check the file agrees with itself:

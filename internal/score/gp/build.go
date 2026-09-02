@@ -318,38 +318,12 @@ func trackTuning(tr *trackNode) (practice.Tuning, int, bool) {
 		// orders are reverses of each other.
 		t.Strings[len(pitches)-1-i] = uint8(pitch)
 	}
-	t.Name = tuningName(t, len(pitches))
+	// A track with fewer than six strings keeps the domain's six-slot array,
+	// so it can never match a known six-string tuning; Named spells it out
+	// instead, which is the right answer for a bass anyway.
+	t = t.Named()
 	return t, len(pitches), true
 }
-
-var knownTunings = []practice.Tuning{
-	practice.StandardTuning,
-	practice.DropDTuning,
-	practice.HalfStepDown,
-}
-
-// tuningName labels a recovered tuning, preferring the name the domain already
-// uses so the HUD does not show "E A D G B E" next to a preset called
-// "Standard".
-func tuningName(t practice.Tuning, stringCount int) string {
-	if stringCount == 6 {
-		for _, known := range knownTunings {
-			if known.Strings == t.Strings {
-				return known.Name
-			}
-		}
-	}
-	// Spelled low to high, the way a guitarist reads a tuning off a headstock.
-	names := make([]string, 0, stringCount)
-	for i := stringCount - 1; i >= 0; i-- {
-		names = append(names, pitchClassName(t.Strings[i]))
-	}
-	return strings.Join(names, " ")
-}
-
-var pitchClassNames = [12]string{"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
-
-func pitchClassName(midi uint8) string { return pitchClassNames[midi%12] }
 
 // trackInstrument picks the most specific instrument label the file offers.
 // The sound name is the closest thing to what the part actually is; the track

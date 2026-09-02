@@ -357,7 +357,6 @@ func tuningFromStaffDetails(details []staffDetailsXML) (practice.Tuning, bool) {
 		}
 
 		t := practice.StandardTuning
-		t.Name = "Tab"
 		found := false
 		for _, st := range d.StaffTunings {
 			// <staff-tuning> numbers its "line" from the BOTTOM of the staff
@@ -376,7 +375,7 @@ func tuningFromStaffDetails(details []staffDetailsXML) (practice.Tuning, bool) {
 			found = true
 		}
 		if found {
-			return t, true
+			return t.Named(), true
 		}
 	}
 	return practice.Tuning{}, false

@@ -141,10 +141,20 @@ func parseFlags() (options, error) {
 	flag.Usage = usage
 	flag.Parse()
 
-	if args := flag.Args(); len(args) > 1 {
-		return o, fmt.Errorf("expected at most one score file, got %d", len(args))
-	} else if len(args) == 1 {
-		o.scorePath = args[0]
+	// `riffhero song.gp --backing song.flac` is the documented invocation and
+	// the one anyone would type, and Go's flag package stops parsing at the
+	// first non-flag argument — so everything after the score would be
+	// silently treated as more file names. Taking the score out and parsing
+	// what is left puts the flags back in play wherever they were written.
+	rest := flag.Args()
+	if len(rest) > 0 {
+		o.scorePath = rest[0]
+		if err := flag.CommandLine.Parse(rest[1:]); err != nil {
+			return o, err
+		}
+		if extra := flag.Args(); len(extra) > 0 {
+			return o, fmt.Errorf("expected at most one score file, also got %q", extra[0])
+		}
 	}
 	return o, nil
 }

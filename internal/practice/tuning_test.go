@@ -187,3 +187,33 @@ func TestSoundsChecksATabPositionAgainstAPitch(t *testing.T) {
 		t.Fatal("an impossible position should not match")
 	}
 }
+
+func TestNamedRecognizesThePresets(t *testing.T) {
+	for _, want := range []Tuning{StandardTuning, DropDTuning, HalfStepDown} {
+		got := Tuning{Name: "Tab", Strings: want.Strings}.Named()
+		if got.Name != want.Name {
+			t.Fatalf("named %q, want %q", got.Name, want.Name)
+		}
+	}
+}
+
+func TestNamedSpellsOutAnUnknownTuning(t *testing.T) {
+	// Low to high, the way a guitarist reads a tuning off a headstock.
+	open := StandardTuning
+	open.Strings = [6]uint8{64, 61, 57, 52, 45, 40} // open A
+	if got := open.Named().Name; got != "E A E A C# E" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestNamedSkipsStringsTheInstrumentDoesNotHave(t *testing.T) {
+	// The array is six long because a guitar is. A four-string bass leaves the
+	// top two slots empty, and spelling them out would invent two strings.
+	bass := Tuning{Strings: [6]uint8{0, 0, 43, 38, 33, 28}}
+	if got := bass.Named().Name; got != "E A D G" {
+		t.Fatalf("got %q", got)
+	}
+	if got := (Tuning{}).Named().Name; got != "Unknown" {
+		t.Fatalf("an empty tuning named %q", got)
+	}
+}
