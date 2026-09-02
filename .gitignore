@@ -1,4 +1,5 @@
 /riffhero
+/bin/
 /dist/
 *.wav
 *.flac
