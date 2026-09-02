@@ -154,7 +154,7 @@ func buildTracks(tracks []parsedTrack, tc tickClock, clock practice.Clock) []pra
 		fb := practice.NewFretboard(practice.StandardTuning)
 		notes := make([]practice.Note, 0, len(pt.notes))
 		for _, rn := range pt.notes {
-			str, fret, ok := placeNote(fb, rn.midi)
+			midi, str, fret, ok := fb.PlaceOrTranspose(rn.midi)
 			if !ok {
 				continue // genuinely outside the guitar's range; nothing to place it at
 			}
@@ -162,7 +162,7 @@ func buildTracks(tracks []parsedTrack, tc tickClock, clock practice.Clock) []pra
 			notes = append(notes, practice.Note{
 				Start:    start,
 				Duration: tc.frame(clock, rn.endTick) - start,
-				MIDI:     rn.midi,
+				MIDI:     midi,
 				String:   str,
 				Fret:     fret,
 			})
@@ -176,26 +176,4 @@ func buildTracks(tracks []parsedTrack, tc tickClock, clock practice.Clock) []pra
 		})
 	}
 	return out
-}
-
-// placeNote resolves a pitch to a fretboard position. StandardTuning's
-// open-string-to-24th-fret range is a contiguous MIDI 40-88; a pitch outside
-// it has no exact position, so it is clamped to whichever end is nearer
-// before trying again. That keeps a track whose transposition or pitch bend
-// drifted a semitone or two past the neck instead of silently losing notes,
-// while a pitch nowhere near playable (ok false on the second attempt too)
-// is dropped, since there is nothing sensible left to place it at.
-func placeNote(fb *practice.Fretboard, midi uint8) (str, fret uint8, ok bool) {
-	if str, fret, ok = fb.Place(midi); ok {
-		return str, fret, ok
-	}
-	const lowest, highest = 40, 88
-	clamped := midi
-	switch {
-	case midi < lowest:
-		clamped = lowest
-	case midi > highest:
-		clamped = highest
-	}
-	return fb.Place(clamped)
 }

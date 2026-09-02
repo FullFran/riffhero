@@ -447,12 +447,14 @@ func TestSMPTEDivision(t *testing.T) {
 	}
 }
 
-func TestUnplaceableNoteClampsToNearestPosition(t *testing.T) {
+// A MIDI file written for another instrument routinely goes below or above a
+// guitar. Both notes here are outside StandardTuning's MIDI 40-88.
+func TestOutOfRangeNotesMoveByWholeOctaves(t *testing.T) {
 	const division = 480
 	clock := practice.Clock{SampleRate: 48000}
 
-	// MIDI 20 is far below StandardTuning's lowest open string (40); MIDI
-	// 110 is far above its highest fretted note (88, string 1 fret 24).
+	// 20 is far below the open low E (40) and 110 far above the top fretted
+	// note (88, string 1 fret 24).
 	track := newTrack().
 		tempo(0, 500000).
 		noteOn(0, 0, 20, 100).
@@ -470,17 +472,49 @@ func TestUnplaceableNoteClampsToNearestPosition(t *testing.T) {
 	if len(song.Tracks) != 1 || len(song.Tracks[0].Notes) != 2 {
 		t.Fatalf("unexpected shape: %+v", song.Tracks)
 	}
-	byMIDI := map[uint8]practice.Note{}
+
+	// 20 comes up two octaves to 44, 110 comes down two to 86. Moving by
+	// octaves keeps a bass line a bass line; clamping to the nearest end of
+	// the range would flatten it into a drone on one note.
+	got := map[uint8]bool{}
 	for _, n := range song.Tracks[0].Notes {
-		byMIDI[n.MIDI] = n
+		got[n.MIDI] = true
 	}
-	low := byMIDI[20]
-	if low.String != 6 || low.Fret != 0 {
-		t.Fatalf("low note position = string %d fret %d, want string 6 fret 0 (clamped to open low E)", low.String, low.Fret)
+	for _, want := range []uint8{44, 86} {
+		if !got[want] {
+			t.Fatalf("expected a note at MIDI %d, got %+v", want, song.Tracks[0].Notes)
+		}
 	}
-	high := byMIDI[110]
-	if high.String != 1 || high.Fret != 24 {
-		t.Fatalf("high note position = string %d fret %d, want string 1 fret 24 (clamped to top of the neck)", high.String, high.Fret)
+}
+
+// The tablature and the expected pitch must agree. They did not once: an
+// out-of-range note kept its original MIDI number while its string and fret
+// came from a clamped one, so the tab showed a position that sounds something
+// else and the scorer waited for a pitch no guitar can produce.
+func TestEveryNoteSoundsWhatItsTabSays(t *testing.T) {
+	const division = 480
+	clock := practice.Clock{SampleRate: 48000}
+
+	b := newTrack().tempo(0, 500000)
+	for _, midi := range []uint8{20, 33, 40, 55, 64, 88, 100, 110} {
+		b = b.noteOn(0, 0, midi, 100).noteOff(division, 0, midi)
+	}
+	data := smf(header(0, 1, division), b.endOfTrack(0).chunk())
+
+	song, err := Parse(data, clock)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(song.Tracks) != 1 {
+		t.Fatalf("unexpected shape: %+v", song.Tracks)
+	}
+
+	tuning := song.Tracks[0].Tuning
+	for i, n := range song.Tracks[0].Notes {
+		if got := tuning.MIDI(n.String, n.Fret); got != n.MIDI {
+			t.Fatalf("note %d says MIDI %d but string %d fret %d sounds %d",
+				i, n.MIDI, n.String, n.Fret, got)
+		}
 	}
 }
 

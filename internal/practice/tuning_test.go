@@ -122,3 +122,68 @@ func TestDropDLowersOnlyTheSixthString(t *testing.T) {
 		t.Fatalf("drop D low string sounds %d, want %d", got, want)
 	}
 }
+
+func TestPlaceOrTransposeMovesByOctaves(t *testing.T) {
+	fb := NewFretboard(StandardTuning)
+
+	// A bass part, two octaves below the guitar.
+	placed, str, fret, ok := fb.PlaceOrTranspose(20)
+	if !ok {
+		t.Fatal("MIDI 20 should place after transposition")
+	}
+	if placed != 44 {
+		t.Fatalf("MIDI 20 placed as %d, want 44 — two octaves up", placed)
+	}
+	if got := StandardTuning.MIDI(str, fret); got != placed {
+		t.Fatalf("string %d fret %d sounds %d, not the placed %d", str, fret, got, placed)
+	}
+
+	// And a piccolo part above the neck.
+	placed, str, fret, ok = fb.PlaceOrTranspose(110)
+	if !ok || placed != 86 {
+		t.Fatalf("MIDI 110 placed as %d ok=%v, want 86", placed, ok)
+	}
+	if got := StandardTuning.MIDI(str, fret); got != placed {
+		t.Fatalf("string %d fret %d sounds %d, not the placed %d", str, fret, got, placed)
+	}
+}
+
+func TestPlaceOrTransposeLeavesPlayablePitchesAlone(t *testing.T) {
+	fb := NewFretboard(StandardTuning)
+	for _, midi := range []uint8{40, 55, 64, 88} {
+		placed, str, fret, ok := fb.PlaceOrTranspose(midi)
+		if !ok || placed != midi {
+			t.Fatalf("MIDI %d was moved to %d", midi, placed)
+		}
+		if got := StandardTuning.MIDI(str, fret); got != midi {
+			t.Fatalf("MIDI %d placed at string %d fret %d, which sounds %d", midi, str, fret, got)
+		}
+	}
+}
+
+func TestPlaceOrTransposeUsesTheTrackTuning(t *testing.T) {
+	// Drop D reaches two semitones lower, so a note that standard tuning has
+	// to move stays where it was written.
+	fb := NewFretboard(DropDTuning)
+	placed, str, fret, ok := fb.PlaceOrTranspose(38)
+	if !ok || placed != 38 {
+		t.Fatalf("MIDI 38 placed as %d ok=%v in drop D", placed, ok)
+	}
+	if got := DropDTuning.MIDI(str, fret); got != 38 {
+		t.Fatalf("string %d fret %d sounds %d in drop D", str, fret, got)
+	}
+}
+
+func TestSoundsChecksATabPositionAgainstAPitch(t *testing.T) {
+	if !StandardTuning.Sounds(64, 1, 0) {
+		t.Fatal("the open high E should sound MIDI 64")
+	}
+	if StandardTuning.Sounds(64, 1, 1) {
+		t.Fatal("the first fret of the high E is not MIDI 64")
+	}
+	// A position that does not exist can never sound anything, which is what
+	// stops a zero-valued string number reading as string 1.
+	if StandardTuning.Sounds(64, 0, 0) || StandardTuning.Sounds(64, 7, 0) || StandardTuning.Sounds(64, 1, 99) {
+		t.Fatal("an impossible position should not match")
+	}
+}

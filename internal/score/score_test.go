@@ -42,6 +42,8 @@ func TestDetectByContent(t *testing.T) {
 		{"musicxml with a byte-order mark", append([]byte{0xEF, 0xBB, 0xBF}, `<score-partwise/>`...), "", FormatMusicXML},
 		{"guitar pro 6", []byte("BCFS...."), "", FormatGuitarPro},
 		{"guitar pro 5", []byte("\x18FICHIER GUITAR PRO v5.10"), "", FormatGuitarPro},
+		{"bare gpif is xml too, and its root element is what says so",
+			[]byte(`<?xml version="1.0"?><GPIF><Score/></GPIF>`), "", FormatGuitarPro},
 		{"nothing recognizable", []byte("hello"), "", FormatUnknown},
 	}
 	for _, c := range cases {
@@ -155,5 +157,122 @@ func TestLoadReportsAMissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "nope.gp"), practice.Clock{SampleRate: 48000})
 	if err == nil {
 		t.Fatal("expected an error for a missing file")
+	}
+}
+
+// buildMIDI writes a one-track SMF whose notes are deliberately outside a
+// guitar's range, so the importer's transposition is exercised.
+func buildMIDI(pitches []byte) []byte {
+	var track []byte
+	vlq := func(v int) []byte {
+		if v == 0 {
+			return []byte{0}
+		}
+		var out []byte
+		for v > 0 {
+			out = append([]byte{byte(v & 0x7f)}, out...)
+			v >>= 7
+		}
+		for i := 0; i < len(out)-1; i++ {
+			out[i] |= 0x80
+		}
+		return out
+	}
+	for _, p := range pitches {
+		track = append(track, 0, 0x90, p, 100)
+		track = append(track, vlq(240)...)
+		track = append(track, 0x80, p, 0)
+	}
+	track = append(track, 0, 0xFF, 0x2F, 0)
+
+	head := []byte{'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xE0}
+	n := len(track)
+	chunk := append([]byte{'M', 'T', 'r', 'k', byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}, track...)
+	return append(head, chunk...)
+}
+
+// TestEveryImportedNoteSoundsWhatItsTabSays is a property every importer has
+// to hold, and one of them did not: an out-of-range note kept its written
+// pitch while its string and fret came from a clamped one, so the tab showed a
+// position that sounds something else and the scorer waited for a pitch no
+// guitar can produce. The player could satisfy neither.
+func TestEveryImportedNoteSoundsWhatItsTabSays(t *testing.T) {
+	clock := practice.Clock{SampleRate: 48000}
+
+	cases := []struct {
+		name string
+		data []byte
+		hint string
+	}{
+		{
+			name: "midi far outside the guitar's range",
+			data: buildMIDI([]byte{20, 33, 40, 64, 88, 100, 120}),
+			hint: "part.mid",
+		},
+		{
+			name: "guitar pro, whose tablature is the source of truth",
+			hint: "part.gp",
+			data: []byte(`<GPIF>
+  <Score><Title>Riff</Title></Score>
+  <MasterTrack><Tracks>0</Tracks><Automations><Automation><Type>Tempo</Type><Bar>0</Bar><Position>0</Position><Value>120 2</Value></Automation></Automations></MasterTrack>
+  <Tracks><Track id="0"><Name>Guitar</Name><Staves><Staff><Properties>
+    <Property name="Tuning"><Pitches>40 45 50 55 59 64</Pitches></Property>
+  </Properties></Staff></Staves></Track></Tracks>
+  <MasterBars><MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar></MasterBars>
+  <Bars><Bar id="0"><Voices>0 -1 -1 -1</Voices></Bar></Bars>
+  <Voices><Voice id="0"><Beats>0 1 2 3</Beats></Voice></Voices>
+  <Beats>
+    <Beat id="0"><Rhythm ref="0"/><Notes>0</Notes></Beat>
+    <Beat id="1"><Rhythm ref="0"/><Notes>1</Notes></Beat>
+    <Beat id="2"><Rhythm ref="0"/><Notes>2</Notes></Beat>
+    <Beat id="3"><Rhythm ref="0"/><Notes>3</Notes></Beat>
+  </Beats>
+  <Notes>
+    <Note id="0"><Properties><Property name="String"><String>0</String></Property><Property name="Fret"><Fret>0</Fret></Property></Properties></Note>
+    <Note id="1"><Properties><Property name="String"><String>2</String></Property><Property name="Fret"><Fret>7</Fret></Property></Properties></Note>
+    <Note id="2"><Properties><Property name="String"><String>5</String></Property><Property name="Fret"><Fret>12</Fret></Property></Properties></Note>
+    <Note id="3"><Properties><Property name="String"><String>4</String></Property><Property name="Fret"><Fret>24</Fret></Property></Properties></Note>
+  </Notes>
+  <Rhythms><Rhythm id="0"><NoteValue>Quarter</NoteValue></Rhythm></Rhythms>
+</GPIF>`),
+		},
+		{
+			name: "musicxml whose tablature contradicts its own pitch",
+			hint: "part.musicxml",
+			data: []byte(`<?xml version="1.0"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Guitar</part-name></score-part></part-list>
+  <part id="P1"><measure number="1">
+    <attributes><divisions>1</divisions></attributes>
+    <note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration>
+      <notations><technical><string>3</string><fret>5</fret></technical></notations></note>
+    <note><pitch><step>E</step><octave>1</octave></pitch><duration>1</duration></note>
+    <note><pitch><step>A</step><octave>2</octave></pitch><duration>1</duration>
+      <notations><technical><string>5</string><fret>0</fret></technical></notations></note>
+  </measure></part>
+</score-partwise>`),
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			song, err := Parse(c.data, c.hint, clock)
+			if err != nil {
+				t.Fatalf("parsing: %v", err)
+			}
+			total := 0
+			for _, track := range song.Tracks {
+				for i, n := range track.Notes {
+					total++
+					if !track.Tuning.Sounds(n.MIDI, n.String, n.Fret) {
+						t.Fatalf("note %d says MIDI %d but string %d fret %d sounds %d",
+							i, n.MIDI, n.String, n.Fret, track.Tuning.MIDI(n.String, n.Fret))
+					}
+				}
+			}
+			if total == 0 {
+				t.Fatal("nothing was imported, so the property proves nothing")
+			}
+		})
 	}
 }

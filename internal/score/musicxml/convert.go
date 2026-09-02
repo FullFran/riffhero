@@ -253,11 +253,20 @@ func placeNote(
 	}
 
 	midi := midiFromPitch(*n.Pitch)
+
+	// The file's own tablature is trusted only when it agrees with the pitch
+	// beside it. A position that sounds something else would show the player
+	// one thing and score another, and there is no way for them to satisfy
+	// both. Anything else — no tablature, or tablature that contradicts
+	// itself — is placed from the pitch, moving by octaves if the part was
+	// written for an instrument with a wider range.
 	str, fret := stringFretFromTechnical(n.Notations)
-	if str == 0 {
-		if s, f, ok := fretboard.Place(midi); ok {
-			str, fret = s, f
+	if !fretboard.Tuning.Sounds(midi, str, fret) {
+		placed, s, f, ok := fretboard.PlaceOrTranspose(midi)
+		if !ok {
+			return lastStart, haveLastStart
 		}
+		midi, str, fret = placed, s, f
 	}
 
 	note := practice.Note{

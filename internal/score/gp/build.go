@@ -7,10 +7,16 @@ import (
 	"github.com/FullFran/riffhero/internal/practice"
 )
 
-// maxImportFret bounds what is accepted as a fret number. Fret is a uint8 in
-// the domain model, so an out-of-range value in a corrupt file would wrap into
-// a plausible-looking note instead of being noticed.
-const maxImportFret = 99
+// maxImportFret bounds what is accepted as a fret number.
+//
+// Two reasons for the bound and one for its value. Fret is a uint8 in the
+// domain model, so an out-of-range value in a corrupt file would wrap into a
+// plausible-looking note instead of being noticed; and a note past the end of
+// the neck is not playable, so keeping it would put a position in the
+// tablature that no hand can reach. The value is the domain's own MaxFret,
+// which is also what every other importer places notes within — a score whose
+// tab and whose pitches disagree is worse than one missing a note.
+const maxImportFret = practice.MaxFret
 
 // builder holds everything the traversal needs: the parsed document, the id
 // tables, the expanded timeline, and the clock the frames are measured in.

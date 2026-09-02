@@ -97,6 +97,49 @@ func (f *Fretboard) Place(midi uint8) (str, fret uint8, ok bool) {
 	return str, fret, ok
 }
 
+// PlaceOrTranspose resolves a pitch to a position on the neck, moving it by
+// whole octaves when it does not fit, and returns the pitch it actually
+// placed.
+//
+// Importers need this because a file written for another instrument routinely
+// goes outside a guitar's range, and the two obvious alternatives are both
+// worse. Dropping the note loses the part. Clamping to the nearest end of the
+// range flattens a bass line into a drone — and if the caller then keeps the
+// original pitch, as one importer did, the tablature and the expected note
+// contradict each other and nothing the player does can resolve either.
+//
+// ok is false only for a pitch no octave of which fits, which cannot happen
+// for a six-string guitar and any input under MIDI 128.
+func (f *Fretboard) PlaceOrTranspose(midi uint8) (placed, str, fret uint8, ok bool) {
+	lowest := f.Tuning.MIDI(6, 0)
+	highest := f.Tuning.MIDI(1, MaxFret)
+
+	placed = midi
+	for placed < lowest && placed <= 127-12 {
+		placed += 12
+	}
+	for placed > highest && placed >= 12 {
+		placed -= 12
+	}
+	if placed < lowest || placed > highest {
+		return midi, 0, 0, false
+	}
+
+	str, fret, ok = f.Place(placed)
+	return placed, str, fret, ok
+}
+
+// Sounds reports whether a tab position produces the given pitch. Importers
+// that carry their own tablature use it to check the file agrees with itself:
+// a position that sounds something other than the written note would show the
+// player one thing and score another.
+func (t Tuning) Sounds(midi, str, fret uint8) bool {
+	if str < 1 || str > 6 || fret > MaxFret {
+		return false
+	}
+	return t.MIDI(str, fret) == midi
+}
+
 // Reset forgets the hand position.
 func (f *Fretboard) Reset() { f.hint, f.hintSt = -1, -1 }
 
