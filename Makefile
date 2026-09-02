@@ -22,8 +22,9 @@ help: ## Show the available targets
 
 check: vet test ## Vet and test the packages that need no display or audio device
 
-check-app: ## Vet cmd/ too; needs the packages from `make deps`
+check-app: ## Vet and test cmd/ too; needs the packages from `make deps`
 	go vet ./...
+	go test ./cmd/...
 
 check-audio: ## Run the tests that open a real audio device
 	go test -tags hardware -v -count=1 ./internal/audio/

@@ -43,6 +43,7 @@ type app struct {
 
 	width, height int
 
+	calibrated  bool
 	loop        practice.Loop
 	showHelp    bool
 	lastNote    practice.DetectedNote
@@ -152,6 +153,7 @@ func (a *app) startAudio() error {
 	a.player = audio.NewPlayer(a.clock, a.end(len(backing)/2))
 	a.det = dsp.NewDetector(a.opts.sampleRate)
 	a.det.LatencyOffset = a.latencyOffset()
+	a.calibrated = a.det.LatencyOffset > 0
 
 	engine, err := audio.Open(host, audio.Config{
 		SampleRate: a.opts.sampleRate,
@@ -171,6 +173,16 @@ func (a *app) startAudio() error {
 	if err := engine.Start(); err != nil {
 		return err
 	}
+
+	// With no stored measurement, the device's own buffering is a far better
+	// starting point than zero: it is a real lower bound on the round trip,
+	// and the alternative is telling a player who is dead on time that they
+	// are consistently early. It is not a substitute for measuring, and the
+	// HUD goes on saying so.
+	if !a.calibrated {
+		a.det.LatencyOffset = engine.Latency()
+	}
+
 	a.head = a.player
 	return nil
 }

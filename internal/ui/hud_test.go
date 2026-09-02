@@ -198,6 +198,7 @@ func TestHUDInputLineShowsTheDetectedPitch(t *testing.T) {
 	in.HasDetected = true
 	in.Detected = practice.DetectedNote{MIDI: 45, CentsError: -7, Confidence: 0.82}
 	in.Latency = in.Clock.Frames(0.012)
+	in.Calibrated = true
 
 	got := BuildHUD(in).Input
 	for _, want := range []string{"A2", "-7¢", "82%", "12 ms"} {
@@ -239,6 +240,7 @@ func TestHUDWarnsAboutDroppedSamples(t *testing.T) {
 	in := hudFixture()
 	in.Live = true
 	in.Latency = 100
+	in.Calibrated = true
 	in.Dropped = 4096
 
 	warnings := BuildHUD(in).Warnings
@@ -261,10 +263,31 @@ func TestHUDWarnsAboutUnderrunsAndUncalibratedLatency(t *testing.T) {
 	}
 }
 
+func TestHUDMarksAnEstimatedLatencyAsEstimated(t *testing.T) {
+	// A number derived from the device's buffer sizes is a lower bound, not a
+	// measurement, and claiming otherwise is how a player stops trusting the
+	// timing feedback.
+	in := hudFixture()
+	in.Live = true
+	in.Level = -20
+	in.Present = true
+	in.HasDetected = true
+	in.Latency = in.Clock.Frames(0.020)
+
+	got := BuildHUD(in)
+	if !strings.Contains(got.Input, "estimated") {
+		t.Fatalf("input line %q should mark the figure as estimated", got.Input)
+	}
+	if len(got.Warnings) == 0 {
+		t.Fatal("an estimated latency should still ask to be calibrated")
+	}
+}
+
 func TestHUDIsQuietWhenNothingIsWrong(t *testing.T) {
 	in := hudFixture()
 	in.Live = true
 	in.Latency = 480
+	in.Calibrated = true
 	if got := BuildHUD(in).Warnings; len(got) != 0 {
 		t.Fatalf("warnings %v, want none", got)
 	}

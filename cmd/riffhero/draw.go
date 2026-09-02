@@ -229,6 +229,7 @@ func (a *app) hudInput() ui.HUDInput {
 		in.Present = a.det.Present()
 		in.Dropped = a.det.Dropped()
 		in.Latency = a.det.LatencyOffset
+		in.Calibrated = a.calibrated
 	}
 	if a.engine != nil {
 		in.Underruns = a.engine.Underruns()

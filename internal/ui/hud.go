@@ -46,6 +46,11 @@ type HUDInput struct {
 	Underruns uint64
 	Latency   practice.Frame
 	Device    string
+
+	// Calibrated says the latency was measured rather than guessed from the
+	// device's buffer sizes. The two are different claims and the second one
+	// still needs the warning.
+	Calibrated bool
 }
 
 // HUD is the formatted display, one string per region of the screen.
@@ -167,6 +172,9 @@ func inputLine(in HUDInput) string {
 	}
 	if in.Latency > 0 {
 		line += fmt.Sprintf("   latency %.0f ms", in.Clock.Seconds(in.Latency)*1000)
+		if !in.Calibrated {
+			line += " (estimated)"
+		}
 	}
 	return line
 }
@@ -182,7 +190,7 @@ func warnings(in HUDInput) []string {
 	if in.Underruns > 0 {
 		out = append(out, fmt.Sprintf("%d audio underruns — the backing track stuttered", in.Underruns))
 	}
-	if in.Live && in.Latency == 0 {
+	if in.Live && !in.Calibrated {
 		out = append(out, "latency not calibrated — run with --calibrate")
 	}
 	return out
