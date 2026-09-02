@@ -54,9 +54,10 @@ Goal: guitar -> detector -> note event.
 
 Audio backend:
 
-- evaluate `gen2brain/malgo` / miniaudio duplex capture;
-- prefer one duplex device/clock for input and backing playback;
-- Linux first: PipeWire through Pulse/JACK/ALSA backend depending measured latency.
+- [x] evaluate `gen2brain/malgo` / miniaudio duplex capture;
+- [x] one duplex device/clock for input and backing playback;
+- [x] Linux first: JACK, PulseAudio or ALSA, whichever initializes, which on a
+      modern desktop all mean PipeWire.
 
 DSP:
 
@@ -72,28 +73,27 @@ Tests:
 
 - [x] generated sine waves E2..E6;
 - [x] harmonically rich synthetic guitar-like tones;
+- [x] a duplex stream measured on real hardware, behind the `hardware` tag;
 - [ ] recorded DI fixtures later.
 
 Exit criterion: stable monophonic detection over normal guitar range with useful latency.
 
-Status: the DSP half is met, in `internal/dsp`, with no audio device involved.
-`Detector` implements `practice.Detector`, so Phase 0's scoring is unchanged and
-still acts as the regression net —
-`TestDetectorFeedsTheScoringSession` scores synthetic audio through the real
-`Session`.
-
-Measured on the development machine:
+Status: met, end to end.
 
 | Property | Value |
 | --- | --- |
 | Analysis latency, attack to emitted note | 65 ms |
-| CPU per second of audio, whole chain | 19 ms (about 50x faster than real time) |
+| Analysis latency for an expected chord | 183 ms |
+| CPU per second of audio, whole chain | 19 ms |
 | Allocations per pitch estimate | 0 |
-| Detection range | 70 Hz – 1400 Hz (below E2, above E6) |
+| Detection range | 70 Hz – 1400 Hz |
+| Measured round trip, digital loopback | 40–43 ms at 87% confidence |
 
-The audio backend is what remains: `malgo`/miniaudio duplex capture, device
-selection, and measuring the round-trip latency that `Detector.LatencyOffset`
-exists to correct.
+Three things about the device path were only findable on hardware, and are
+recorded in the audio package rather than here: JACK refuses a one-channel
+capture request outright, a failed `ma_device_init` leaves the process unable
+to open another context, and selecting a device by name panics under cgo's
+pointer rules unless the id is copied somewhere that holds no Go pointers.
 
 ---
 
@@ -101,15 +101,21 @@ exists to correct.
 
 Goal: what you hear and what the scorer sees use the same clock.
 
-- [ ] decode WAV first;
-- [ ] MP3/FLAC after architecture is stable;
-- [ ] audio output from the same duplex callback as capture;
-- [ ] transport: play/pause/seek/restart;
-- [ ] `Frame` is the authoritative timeline;
-- [ ] latency calibration offset stored as frames;
-- [ ] A/B loop.
+- [x] decode WAV first;
+- [x] MP3/FLAC after architecture is stable;
+- [x] audio output from the same duplex callback as capture;
+- [x] transport: play/pause/seek/restart;
+- [x] `Frame` is the authoritative timeline;
+- [x] latency calibration offset stored as frames;
+- [x] A/B loop.
 
 Exit criterion: backing loop remains sample-accurate enough that repeated scoring does not drift.
+
+Status: met, measured. Over a second of playback on PipeWire the song advances
+0.998x of real time, with no underruns and no dropped input. The clock is the
+device's: the callback moves the playhead from the position stamped on the last
+frame it actually handed over, so a starved renderer stalls the score instead
+of letting it run ahead of the sound.
 
 ---
 
@@ -143,20 +149,35 @@ type Event struct {
 
 Exit criterion: load a real song and render its guitar part against the internal timeline.
 
+Status: met.
+
+1. [x] Guitar Pro 7/8 (`.gp`) — the preferred format, and the only one that
+       carries real tablature. Repeats and alternate endings are expanded.
+       `.gpx` (GP6) and `.gp3/4/5` are detected and refused by name rather than
+       mis-parsed.
+2. [x] MusicXML, raw and zipped, with chords, backup, ties across barlines and
+       tab staves with their own tuning.
+3. [x] MIDI, with the tempo map applied per note rather than accumulated.
+4. GP3/4/5 remain out of scope; the error tells the user to export.
+
+Importers that carry no tablature have their notes placed on the neck by
+`practice.Fretboard`, which remembers where the hand was so a phrase stays in
+one position instead of scattering across equally-valid alternatives.
+
 ---
 
 # Phase 4 — practice UX
 
-- [ ] six-string horizontal tab;
-- [ ] current-position cursor;
-- [ ] expected note highlight;
-- [ ] detected pitch + cents;
-- [ ] Perfect / Good / Miss feedback;
-- [ ] accuracy and combo;
-- [ ] keyboard-first controls;
-- [ ] bar/beat A-B loop selection;
-- [ ] speed control;
-- [ ] progressive practice rule.
+- [x] six-string horizontal tab;
+- [x] current-position cursor;
+- [x] expected note highlight;
+- [x] detected pitch + cents;
+- [x] Perfect / Good / Miss feedback;
+- [x] accuracy and combo;
+- [x] keyboard-first controls;
+- [x] bar/beat A-B loop selection;
+- [x] speed control;
+- [x] progressive practice rule.
 
 Initial adaptive rule:
 
@@ -165,6 +186,14 @@ accuracy >= 95% -> +5 percentage points speed
 accuracy < 75%  -> -5 percentage points speed
 otherwise       -> repeat
 ```
+
+Implemented as written, with one addition: a lap that resolved nothing is not
+evidence. It means the player paused, and dragging the speed down for that
+would be nonsense.
+
+Scoring is scoped to the loop region. Scoring the whole song while looping four
+bars makes accuracy meaningless — every note outside the region expires as a
+miss and drags it to nothing.
 
 No complex gamification until the practice loop itself is fun.
 
@@ -187,21 +216,48 @@ Use monophonic detector for single-note events and chord verifier only for simul
 
 Exit criterion: power chords and common open/barre triads score reliably enough for practice.
 
+Status: met. `TestExpectedChordScoresThroughTheSession` drives synthetic audio
+of a strummed E5 through the real detector and the real scoring session.
+
+| Case | Score | Found |
+| --- | --- | --- |
+| E5 power chord, played right | 0.91 | 2 of 2 |
+| A barre chord, played right | 0.79 | 5 of 5 |
+| A expected, E major played | 0.29 | 2 of 5 |
+| E2 expected, only E3 sounding | 0.36, absent | — |
+
+Two rules carry it. The harmonic sum decides rather than the fundamental,
+because on a wound low E the fundamental is a rumour and a verifier that looked
+only there would fail on exactly the power chords this exists for. And a
+partial belongs to the lowest expected pitch that predicts it, because every
+harmonic of a pitch an octave up is also a harmonic of the one below, so
+evidence alone can never separate them.
+
+The verifier only runs where the score writes two or more notes together. A
+single expected note keeps the monophonic path and its much shorter latency.
+
 ---
 
 # Phase 6 — quality slowdown
 
 v0.x can alter playback rate even if pitch changes while prototyping.
 
-Proper solution:
+Resolution: WSOLA in pure Go, in `internal/stretch`, behind an interface small
+enough that a Signalsmith binding could replace it without touching a caller.
+Practice rates are 0.25x to 1.0x, which is where WSOLA is strongest, and this
+keeps the project's only cgo boundary the audio device.
 
-- bind Signalsmith Stretch (MIT, C++) through a minimal cgo wrapper;
-- keep this behind an internal interface so the core remains pure Go;
-- target 0.5x–1.0x practice rates without pitch shift.
+- [x] pitch preserved: 440 Hz at half speed comes back at 440.0000 Hz;
+- [x] 0.25x–1.0x, and rate 1.0 is a verbatim copy rather than an overlap-add;
+- [x] 17 ms of CPU per second of stereo output, zero allocations in steady
+      state.
 
-Exit criterion: backing at 70–90% sounds good enough to practice against for long sessions.
+Exit criterion: backing at 70–90% sounds good enough to practise against for long sessions.
 
----
+Status: met for the tonal material a backing track is mostly made of. WSOLA
+smears aperiodic content — cymbals, breath — and cannot match the phase of a
+partial below about 50 Hz. Both are properties of the algorithm and are
+documented in the package.
 
 # Explicit non-goals until after v0.3
 
@@ -218,8 +274,18 @@ Exit criterion: backing at 70–90% sounds good enough to practice against for l
 
 ---
 
-# Immediate next task
+# Where this leaves it
 
-Implement Phase 0 fully before touching an audio driver.
+Every phase's exit criterion is met and the app does what the README promises.
+What is worth doing next is no longer a phase:
 
-Reason: scoring/timeline bugs and audio bugs are painful to distinguish when introduced together.
+- **Recorded DI fixtures.** Every DSP test to date is synthetic. The `pluck`
+  fixture is a model of a string, not a recording, and it is the last thing
+  standing between "the tests pass" and "it works on a real pickup".
+- **Articulations.** Bends, slides, hammer-ons and vibrato are parsed out of
+  Guitar Pro files and then ignored; a bend currently reads as an out-of-tune
+  note. Scoring them needs a pitch-contour matcher, not another importer.
+- **Da Capo and Dal Segno.** Detected, not followed. A score using them plays
+  straight through.
+- **More than six strings.** `practice.Tuning` is a fixed array, so seven- and
+  eight-string tracks are skipped.
