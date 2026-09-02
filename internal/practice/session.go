@@ -24,9 +24,14 @@ type SessionStats struct {
 
 // FeedResult reports what a single detection did to the score. Index is the
 // expected note it consumed, or -1 when the detection matched nothing.
+//
+// The detection itself comes back too. The view needs to show what was heard,
+// not only what it was worth, and a wrong note that scored nothing is exactly
+// the case where the player most needs to see the pitch.
 type FeedResult struct {
 	Match
-	Index int
+	Index    int
+	Detected DetectedNote
 }
 
 // VisibleNote is one expected note plus its current scoring state, for rendering.
@@ -90,12 +95,12 @@ func (s *Session) Feed(d DetectedNote) FeedResult {
 	idx := s.candidate(d)
 	if idx < 0 {
 		s.stats.Extra++
-		return FeedResult{Match: Match{Rating: Miss}, Index: -1}
+		return FeedResult{Match: Match{Rating: Miss}, Index: -1, Detected: d}
 	}
 
 	m := MatchSingle(s.notes[idx], d, s.cfg.Windows, s.cfg.MaxCents)
 	s.resolve(idx, m.Rating)
-	return FeedResult{Match: m, Index: idx}
+	return FeedResult{Match: m, Index: idx, Detected: d}
 }
 
 // candidate finds the closest unresolved note this detection is allowed to
@@ -175,3 +180,41 @@ func (s *Session) Upcoming(from, to Frame) []VisibleNote {
 }
 
 func absFrame(f Frame) Frame { return Frame(math.Abs(float64(f))) }
+
+// Reset clears every resolution so the same notes can be practised again. It
+// is what a lap of an A-B loop does: same section, fresh scoreboard.
+func (s *Session) Reset() {
+	for i := range s.states {
+		s.states[i] = noteState{}
+	}
+	s.stats = SessionStats{Total: len(s.notes)}
+	s.last, s.lastSet = Miss, false
+}
+
+// NextExpected returns the first unresolved note starting at or after from,
+// which is the one the UI highlights as what to play now.
+func (s *Session) NextExpected(from Frame) (VisibleNote, bool) {
+	for i, n := range s.notes {
+		if s.states[i].resolved || n.Start < from {
+			continue
+		}
+		return VisibleNote{Index: i, Note: n}, true
+	}
+	return VisibleNote{}, false
+}
+
+// Pending reports how many notes have not resolved yet.
+func (s *Session) Pending() int { return s.stats.Total - s.stats.Resolved }
+
+// NotesIn returns the notes starting inside [from,to). Building a Session from
+// it is how an A-B loop is scored on its own section rather than on the whole
+// song.
+func NotesIn(notes []Note, from, to Frame) []Note {
+	out := make([]Note, 0, len(notes))
+	for _, n := range notes {
+		if n.Start >= from && n.Start < to {
+			out = append(out, n)
+		}
+	}
+	return out
+}
