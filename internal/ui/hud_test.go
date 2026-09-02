@@ -194,6 +194,7 @@ func TestHUDInputLineShowsTheDetectedPitch(t *testing.T) {
 	in := hudFixture()
 	in.Live = true
 	in.Level = -18
+	in.Present = true
 	in.HasDetected = true
 	in.Detected = practice.DetectedNote{MIDI: 45, CentsError: -7, Confidence: 0.82}
 	in.Latency = in.Clock.Frames(0.012)
@@ -203,6 +204,32 @@ func TestHUDInputLineShowsTheDetectedPitch(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("input line %q is missing %q", got, want)
 		}
+	}
+}
+
+func TestHUDInputLineDropsThePitchOnceTheStringHasDied(t *testing.T) {
+	// Leaving the last note up after it stopped sounding reads as a detector
+	// stuck on it, which is exactly what a player would then go looking for.
+	in := hudFixture()
+	in.Live = true
+	in.Level = -55
+	in.Present = false
+	in.HasDetected = true
+	in.Detected = practice.DetectedNote{MIDI: 45}
+
+	if got := BuildHUD(in).Input; strings.Contains(got, "A2") {
+		t.Fatalf("input line %q still shows a pitch nothing is producing", got)
+	}
+}
+
+func TestHUDPracticeLineSaysWhetherThereIsABacking(t *testing.T) {
+	in := hudFixture()
+	if got := BuildHUD(in).Practice; !strings.Contains(got, "backing off") {
+		t.Fatalf("practice line %q", got)
+	}
+	in.Backing = true
+	if got := BuildHUD(in).Practice; !strings.Contains(got, "backing on") {
+		t.Fatalf("practice line %q", got)
 	}
 }
 

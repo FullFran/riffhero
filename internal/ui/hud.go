@@ -17,7 +17,6 @@ type HUDInput struct {
 	Title  string
 	Artist string
 	Track  string
-	Source string
 
 	Position practice.Frame
 	End      practice.Frame
@@ -97,8 +96,8 @@ func BuildHUD(in HUDInput) HUD {
 	h.Score = fmt.Sprintf("accuracy %3.0f%%   combo x%-3d best x%-3d   perfect %-3d good %-3d miss %-3d   %d/%d",
 		st.Accuracy*100, st.Combo, st.MaxCombo, st.Perfect, st.Good, st.Miss, st.Resolved, st.Total)
 
-	h.Practice = fmt.Sprintf("speed %s   loop %s   progressive %s",
-		SpeedLabel(in.Speed), loopLabel(in), onOff(in.Adaptive))
+	h.Practice = fmt.Sprintf("speed %s   loop %s   progressive %s   backing %s",
+		SpeedLabel(in.Speed), loopLabel(in), onOff(in.Adaptive), onOff(in.Backing))
 	if in.HasLap {
 		h.Practice += fmt.Sprintf("   last lap %.0f%%", in.LastLap.Accuracy*100)
 	}
@@ -154,8 +153,11 @@ func inputLine(in HUDInput) string {
 		return "input   scripted performance (no guitar)"
 	}
 
+	// A pitch is only shown while a string is actually sounding. Leaving the
+	// last note up after it has died reads as a detector stuck on it, which is
+	// the one thing a player would then go looking for.
 	pitch := "—"
-	if in.HasDetected {
+	if in.HasDetected && in.Present {
 		pitch = fmt.Sprintf("%s %s (%.0f%%)",
 			NoteName(in.Detected.MIDI), Cents(in.Detected.CentsError), in.Detected.Confidence*100)
 	}

@@ -89,7 +89,6 @@ type Engine struct {
 	rend   *renderer
 
 	stop chan struct{}
-	done chan struct{}
 
 	volume  atomic.Uint64
 	monitor atomic.Uint64
@@ -129,7 +128,6 @@ func Open(host *Host, cfg Config, player *Player, det *dsp.Detector) (*Engine, e
 		ring:   newOutRing(outRingFrames),
 		tmap:   NewTimeMap(256),
 		stop:   make(chan struct{}),
-		done:   make(chan struct{}),
 		mono:   make([]float32, chunkFrames),
 		stereo: make([]float32, chunkFrames*2),
 	}

@@ -26,7 +26,6 @@ var (
 	colorMiss       = color.RGBA{0xd9, 0x4c, 0x5a, 0xff}
 	colorLoop       = color.RGBA{0x2b, 0x3a, 0x33, 0xff}
 	colorLoopEdge   = color.RGBA{0x4c, 0xd9, 0x7a, 0x80}
-	colorWarning    = color.RGBA{0xf2, 0x8c, 0x4c, 0xff}
 	colorMeter      = color.RGBA{0x4c, 0xd9, 0x7a, 0xff}
 	colorMeterBed   = color.RGBA{0x25, 0x2a, 0x32, 0xff}
 )
@@ -207,7 +206,6 @@ func (a *app) hudInput() ui.HUDInput {
 		Title:    a.song.Title,
 		Artist:   a.song.Artist,
 		Track:    a.song.Tracks[a.track].Name,
-		Source:   a.song.Source,
 		Position: a.head.Position(),
 		End:      a.head.End(),
 		Playing:  a.head.Playing(),
