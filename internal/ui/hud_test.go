@@ -36,7 +36,7 @@ func TestNoteName(t *testing.T) {
 func TestStringLabelsFollowTheTuning(t *testing.T) {
 	// Hard-coding "eBGDAE" would lie about a drop-D score, which is exactly
 	// the score someone is most likely to be practising.
-	if got := StringLabels(practice.StandardTuning); got != [6]string{"e", "b", "g", "D", "A", "E"} {
+	if got := StringLabels(practice.StandardTuning); got != [6]string{"e", "B", "G", "D", "A", "E"} {
 		t.Fatalf("standard tuning labelled %v", got)
 	}
 	got := StringLabels(practice.DropDTuning)

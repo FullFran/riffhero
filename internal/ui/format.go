@@ -17,13 +17,18 @@ func NoteName(midi uint8) string {
 }
 
 // StringLabels are the open strings of a tuning, top row first, for the left
-// edge of the tab. They come from the tuning rather than being hard-coded
-// "eBGDAE" so a drop-D score does not lie about its bottom string.
+// edge of the tab.
+//
+// They come from the tuning rather than being hard-coded "eBGDAE", so a
+// drop-D score does not lie about its bottom string. Only the top string is
+// lowercased, which is how tab has always been written: it is there to tell
+// the high E from the low one, and lowercasing more of them only makes the
+// letters harder to read next to the fret numbers.
 func StringLabels(t practice.Tuning) [6]string {
 	var out [6]string
 	for s := uint8(1); s <= 6; s++ {
 		name := pitchNames[t.Strings[s-1]%12]
-		if s <= 3 {
+		if s == 1 {
 			name = strings.ToLower(name)
 		}
 		out[s-1] = name

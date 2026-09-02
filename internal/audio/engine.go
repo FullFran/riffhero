@@ -164,24 +164,7 @@ func (e *Engine) deviceConfig() (malgo.DeviceConfig, func(), error) {
 		kind = malgo.Playback
 	}
 
-	cfg := malgo.DefaultDeviceConfig(kind)
-	cfg.SampleRate = uint32(e.cfg.SampleRate)
-	cfg.PeriodSizeInFrames = uint32(e.cfg.PeriodFrames)
-	cfg.PerformanceProfile = malgo.LowLatency
-
-	// The format is pinned and the channel counts deliberately are not.
-	//
-	// Asking for one capture channel seems obviously right — the detector is
-	// monophonic — and it is what JACK refuses outright: its ports are the
-	// system's, and a duplex device that does not match them fails to
-	// initialize. Worse, a failed ma_device_init leaves the process unable to
-	// create another context at all, so there is no second attempt to fall
-	// back to. Taking whatever the device has and folding it down in the
-	// callback costs a handful of adds and works on every backend.
-	cfg.Capture.Format = malgo.FormatF32
-	cfg.Capture.Channels = 0
-	cfg.Playback.Format = malgo.FormatF32
-	cfg.Playback.Channels = 0
+	cfg := deviceConfigFor(kind, e.cfg.SampleRate, e.cfg.PeriodFrames)
 
 	var in, out *Device
 	if e.cfg.Capture {
@@ -193,6 +176,31 @@ func (e *Engine) deviceConfig() (malgo.DeviceConfig, func(), error) {
 	return cfg, pinDevices(&cfg, in, out), nil
 }
 
+// deviceConfigFor is the configuration RiffHero asks every device for. It is
+// shared by the engine and the calibrator, because the two diverging is
+// exactly how the calibrator kept a fatal channel count after the engine's was
+// fixed.
+//
+// The format is pinned and the channel counts deliberately are not. Asking for
+// one capture channel seems obviously right — the detector is monophonic — and
+// it is what JACK refuses outright: its ports are the system's, and a duplex
+// device that does not match them fails to initialize. Worse, a failed
+// ma_device_init leaves the process unable to create another context at all,
+// so there is no second attempt to fall back to. Taking whatever the device
+// has and folding it down in the callback costs a handful of adds and works on
+// every backend.
+func deviceConfigFor(kind malgo.DeviceType, sampleRate, periodFrames int) malgo.DeviceConfig {
+	cfg := malgo.DefaultDeviceConfig(kind)
+	cfg.SampleRate = uint32(sampleRate)
+	cfg.PeriodSizeInFrames = uint32(periodFrames)
+	cfg.PerformanceProfile = malgo.LowLatency
+	cfg.Capture.Format = malgo.FormatF32
+	cfg.Capture.Channels = 0
+	cfg.Playback.Format = malgo.FormatF32
+	cfg.Playback.Channels = 0
+	return cfg
+}
+
 // pinDevices points the config at the chosen endpoints and returns the release
 // function to call once the device has been initialized.
 //
@@ -201,17 +209,30 @@ func (e *Engine) deviceConfig() (malgo.DeviceConfig, func(), error) {
 // them onto the C heap instead, which works but leaks: it has no matching
 // free. Pinning is the same thing without the leak, and it is safe because
 // miniaudio copies the ID into the device before ma_device_init returns.
+//
+// The IDs are copied into a bare array first, and that is not tidiness. Go may
+// only hand C a pointer to memory that contains no Go pointers, and the check
+// is made against the whole enclosing object — so pointing at Device.id, in a
+// struct that also holds a Name string, panics with "Go pointer to unpinned Go
+// pointer" the moment a device is chosen by name instead of defaulted. The
+// array holds nothing but bytes.
 func pinDevices(cfg *malgo.DeviceConfig, in, out *Device) func() {
 	pinner := &runtime.Pinner{}
+	ids := new([2]malgo.DeviceID)
+	pinner.Pin(ids)
+
 	if in != nil {
-		pinner.Pin(&in.id)
-		cfg.Capture.DeviceID = unsafe.Pointer(&in.id)
+		ids[0] = in.id
+		cfg.Capture.DeviceID = unsafe.Pointer(&ids[0])
 	}
 	if out != nil {
-		pinner.Pin(&out.id)
-		cfg.Playback.DeviceID = unsafe.Pointer(&out.id)
+		ids[1] = out.id
+		cfg.Playback.DeviceID = unsafe.Pointer(&ids[1])
 	}
-	return pinner.Unpin
+	return func() {
+		runtime.KeepAlive(ids)
+		pinner.Unpin()
+	}
 }
 
 // Start begins the stream and the render goroutine.

@@ -52,13 +52,13 @@ func (o CalibrationOptions) withDefaults() CalibrationOptions {
 		o.PeriodFrames = DefaultPeriodFrames
 	}
 	if o.Clicks <= 0 {
-		o.Clicks = 8
+		o.Clicks = 12
 	}
 	if o.Spacing <= 0 {
 		o.Spacing = 0.35
 	}
 	if o.Volume <= 0 {
-		o.Volume = 0.5
+		o.Volume = 0.45
 	}
 	if o.MaxLatencyMillis <= 0 {
 		o.MaxLatencyMillis = 250
@@ -72,10 +72,16 @@ type Calibration struct {
 	Millis     float64
 	Confidence float64 // 0..1 peak correlation
 	SampleRate int
+
+	// Peak is the loudest sample that came back, in dBFS. It is the difference
+	// between "the clicks were not heard" and "nothing was heard at all", and
+	// those two have completely different fixes.
+	PeakDB float64
 }
 
 func (c Calibration) String() string {
-	return fmt.Sprintf("%.1f ms (%d frames) at %.0f%% confidence", c.Millis, c.Frames, c.Confidence*100)
+	return fmt.Sprintf("%.1f ms (%d frames) at %.0f%% confidence, peak %.0f dBFS",
+		c.Millis, c.Frames, c.Confidence*100, c.PeakDB)
 }
 
 // MinConfidence is the correlation below which a measurement is refused. A bad
@@ -123,21 +129,27 @@ func ClickTrain(sampleRate, clicks int, spacing, volume float64) []float32 {
 // destroy waveform correlation while leaving the shape of an attack perfectly
 // intact.
 //
-// The correlation is Pearson's, not a plain dot product, and that matters more
-// than it looks. A room has a noise floor, so the returning envelope is the
-// clicks sitting on top of a constant. A dot product sees that constant as
-// signal and scores every lag about equally well; subtracting the mean first
-// leaves only the shape, and the peak stands out of the noise instead of
-// drowning in it. Confidence is that peak, and the caller is expected to
-// refuse a low one rather than store a guess.
+// What is correlated is the *rise* in each envelope, not the envelope itself.
+// A room smears a four-millisecond click into a couple of hundred milliseconds
+// of decay, so the returning envelope looks nothing like the one that was sent
+// and the two correlate at about a third — enough to be refused as noise. The
+// attack survives the room intact, and the half-wave-rectified difference is
+// exactly the attack with the tail thrown away.
+//
+// The correlation is Pearson's, not a plain dot product, and that matters too.
+// A room has a noise floor, so what comes back sits on top of a constant. A
+// dot product counts that constant as signal and scores every lag about
+// equally well; subtracting the mean leaves only the shape. Confidence is the
+// peak, and the caller is expected to refuse a low one rather than store a
+// guess.
 func MeasureLag(played, recorded []float32, sampleRate, maxLag int) (lag int, confidence float64) {
 	if len(played) == 0 || len(recorded) == 0 || sampleRate <= 0 || maxLag <= 0 {
 		return 0, 0
 	}
 
-	const decim = 16
-	ref := envelope(played, decim)
-	got := envelope(recorded, decim)
+	const decim = 128
+	ref := flux(envelope(played, decim))
+	got := flux(envelope(recorded, decim))
 	if len(ref) < 8 || len(got) < 8 {
 		return 0, 0
 	}
@@ -193,6 +205,22 @@ func pearson(a, b []float32) (float64, bool) {
 	return dot / math.Sqrt(va*vb), true
 }
 
+// flux is the half-wave-rectified first difference of an envelope: how much
+// louder each block is than the one before it, and zero where it is quieter.
+// It is what is left of a click after a room has finished with it.
+func flux(env []float32) []float32 {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make([]float32, len(env))
+	for i := 1; i < len(env); i++ {
+		if d := env[i] - env[i-1]; d > 0 {
+			out[i] = d
+		}
+	}
+	return out
+}
+
 // envelope reduces a signal to the energy of each block of decim samples.
 //
 // Block RMS rather than a peak-following detector: a peak follower locks onto
@@ -236,41 +264,51 @@ func Calibrate(host *Host, opts CalibrationOptions) (Calibration, error) {
 	recorded := make([]float32, len(played))
 
 	var outPos, inPos atomic.Int64
+	mono := make([]float32, chunkFrames)
 
+	// The same channel-count rules as the engine: whatever the device has,
+	// folded down here rather than demanded of the backend.
 	callback := func(outBytes, inBytes []byte, frames uint32) {
 		n := int(frames)
 		if n <= 0 {
 			return
 		}
-		if len(inBytes) >= n*4 {
-			in := asFloat32(inBytes, n)
-			at := int(inPos.Load())
-			c := copy(recorded[min(at, len(recorded)):], in)
-			inPos.Store(int64(at + c))
-		}
-		if len(outBytes) >= n*8 {
-			out := asFloat32(outBytes, n*2)
-			at := int(outPos.Load())
-			for i := 0; i < n; i++ {
-				var v float32
-				if at+i < len(played) {
-					v = played[at+i]
-				}
-				out[i*2], out[i*2+1] = v, v
+		inCh := channelsOf(inBytes, n)
+		outCh := channelsOf(outBytes, n)
+
+		for off := 0; off < n; {
+			size := n - off
+			if size > chunkFrames {
+				size = chunkFrames
 			}
-			outPos.Store(int64(at + n))
+
+			if inCh > 0 {
+				in := asFloat32(inBytes, n*inCh)
+				downmix(mono[:size], in[off*inCh:(off+size)*inCh], inCh)
+				if at := int(inPos.Load()); at < len(recorded) {
+					inPos.Store(int64(at + copy(recorded[at:], mono[:size])))
+				}
+			}
+			if outCh > 0 {
+				out := asFloat32(outBytes, n*outCh)
+				at := int(outPos.Load())
+				for i := 0; i < size; i++ {
+					var v float32
+					if at+i < len(played) {
+						v = played[at+i]
+					}
+					base := (off + i) * outCh
+					for c := 0; c < outCh; c++ {
+						out[base+c] = v
+					}
+				}
+				outPos.Store(int64(at + size))
+			}
+			off += size
 		}
 	}
 
-	cfg := malgo.DefaultDeviceConfig(malgo.Duplex)
-	cfg.SampleRate = uint32(opts.SampleRate)
-	cfg.PeriodSizeInFrames = uint32(opts.PeriodFrames)
-	cfg.PerformanceProfile = malgo.LowLatency
-	cfg.Capture.Format = malgo.FormatF32
-	cfg.Capture.Channels = 1
-	cfg.Playback.Format = malgo.FormatF32
-	cfg.Playback.Channels = 2
-
+	cfg := deviceConfigFor(malgo.Duplex, opts.SampleRate, opts.PeriodFrames)
 	pinner := pinDevices(&cfg, opts.Input, opts.Output)
 	device, err := malgo.InitDevice(host.ctx.Context, cfg, malgo.DeviceCallbacks{Data: callback})
 	pinner()
@@ -305,9 +343,29 @@ func Calibrate(host *Host, opts CalibrationOptions) (Calibration, error) {
 		Millis:     float64(lag) / float64(opts.SampleRate) * 1000,
 		Confidence: confidence,
 		SampleRate: opts.SampleRate,
+		PeakDB:     peakDB(recorded[:got]),
 	}
 	if confidence < MinConfidence {
-		return result, fmt.Errorf("could not hear the calibration clicks (confidence %.0f%%); check the input is picking up the output", confidence*100)
+		// Two very different failures, and the fix for each is different, so
+		// they get different sentences.
+		if result.PeakDB < -50 {
+			return result, fmt.Errorf("the input heard almost nothing (peak %.0f dBFS): check it is the right device and that it is not muted", result.PeakDB)
+		}
+		return result, fmt.Errorf("could not pick the clicks out of what came back (confidence %.0f%%, peak %.0f dBFS): turn the output up, move the microphone closer, or quieten the room",
+			confidence*100, result.PeakDB)
 	}
 	return result, nil
+}
+
+func peakDB(buf []float32) float64 {
+	var peak float64
+	for _, v := range buf {
+		if a := math.Abs(float64(v)); a > peak {
+			peak = a
+		}
+	}
+	if peak <= 0 {
+		return math.Inf(-1)
+	}
+	return 20 * math.Log10(peak)
 }

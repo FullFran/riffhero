@@ -9,6 +9,23 @@ import (
 	"github.com/FullFran/riffhero/internal/practice"
 )
 
+// HeaderHeight and FooterHeight are the panels the tab must not run under.
+// The layout knows about them because it is the thing that decides where the
+// strings go, and a tab that slides under the scoreboard is unreadable.
+const (
+	HeaderHeight = 46
+	FooterHeight = 74
+
+	// tabMargin is the clearance either side of the strings, for bar numbers
+	// above and the rating below.
+	tabMargin = 44
+
+	// maxStringSpacing stops a very tall window spreading six strings across
+	// half a metre of screen, where the eye has to travel between them.
+	maxStringSpacing = 78
+	minStringSpacing = 18
+)
+
 // Layout maps the practice timeline onto a scrolling six-string tab. Notes
 // travel right to left and are due when they cross the playhead.
 type Layout struct {
@@ -22,14 +39,32 @@ type Layout struct {
 	clock practice.Clock
 }
 
+// NewLayout centres the tab in whatever room is left between the panels.
+//
+// The window is whatever the window manager decides — a tiling desktop will
+// hand this a tall half-screen without asking — so the geometry is derived
+// from the space available rather than from fractions of the total height,
+// which left a third of the window empty at the top and bottom.
 func NewLayout(width, height float64, clock practice.Clock) Layout {
-	spacing := height * 0.09
+	const top = HeaderHeight + tabMargin
+	bottom := height - FooterHeight - tabMargin
+
+	spacing := (bottom - top) / 5
+	switch {
+	case spacing > maxStringSpacing:
+		spacing = maxStringSpacing
+	case spacing < minStringSpacing:
+		spacing = minStringSpacing
+	}
+	// Whatever the clamp left over goes above and below equally.
+	first := top + ((bottom-top)-spacing*5)/2
+
 	return Layout{
 		Width:           width,
 		Height:          height,
-		PlayheadX:       width * 0.28,
+		PlayheadX:       width * 0.25,
 		PixelsPerSecond: 220,
-		TopString:       height * 0.26,
+		TopString:       first,
 		StringSpacing:   spacing,
 		clock:           clock,
 	}

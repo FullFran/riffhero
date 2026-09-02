@@ -93,7 +93,9 @@ func build(o options, cfg config.Config) (*app, error) {
 	}
 
 	a.buildRunner()
-	a.applyInitialSettings()
+	if err := a.applyInitialSettings(); err != nil {
+		return nil, err
+	}
 	return a, nil
 }
 
@@ -125,15 +127,19 @@ func (a *app) startAudio() error {
 	}
 	a.host = host
 
-	var in, out *audio.Device
-	if in, err = host.FindDevice(audio.Input, pick(a.opts.input, a.cfg.InputDevice)); err != nil {
+	in, note, err := resolveDevice(host, audio.Input, a.opts.input, a.cfg.InputDevice)
+	if err != nil {
 		return err
 	}
+	a.note(note)
+
+	var out *audio.Device
 	playback := !a.opts.noBacking
 	if playback {
-		if out, err = host.FindDevice(audio.Output, pick(a.opts.output, a.cfg.OutputDevice)); err != nil {
+		if out, note, err = resolveDevice(host, audio.Output, a.opts.output, a.cfg.OutputDevice); err != nil {
 			return err
 		}
+		a.note(note)
 	}
 
 	backing, err := a.loadBacking()
@@ -222,7 +228,7 @@ func (a *app) buildRunner() {
 	a.runner = practice.NewRunner(a.head, a.detector(), cfg)
 }
 
-func (a *app) applyInitialSettings() {
+func (a *app) applyInitialSettings() error {
 	speed := a.opts.speed
 	if speed <= 0 {
 		speed = a.cfg.Speed
@@ -230,6 +236,25 @@ func (a *app) applyInitialSettings() {
 	if speed > 0 {
 		a.head.SetSpeed(speed)
 	}
+
+	if a.opts.loop == "" {
+		return nil
+	}
+	from, to, err := parseBarRange(a.opts.loop)
+	if err != nil {
+		return err
+	}
+	if len(a.song.Grid) == 0 {
+		return fmt.Errorf("this score has no bar grid to loop over")
+	}
+	if to > len(a.song.Grid) {
+		return fmt.Errorf("bar %d does not exist; the score has %d", to, len(a.song.Grid))
+	}
+	start, end := a.song.Grid.Span(from-1, to-1)
+	a.loop = practice.Loop{A: start, B: end, Enabled: true}
+	a.runner.SetLoop(a.loop)
+	a.head.Restart()
+	return nil
 }
 
 func (a *app) loadBacking() ([]float32, error) {
@@ -264,6 +289,14 @@ func (a *app) monitorSetting() float64 {
 		return a.opts.monitor
 	}
 	return a.cfg.Monitor
+}
+
+// note records something the player should see once, without it being an
+// error.
+func (a *app) note(text string) {
+	if text != "" {
+		a.warnings = append(a.warnings, text)
+	}
 }
 
 // live reports whether a real guitar is being listened to.

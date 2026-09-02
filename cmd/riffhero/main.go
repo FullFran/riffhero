@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -42,6 +43,7 @@ type options struct {
 	speed      float64
 	latencyMS  float64
 	adaptive   bool
+	loop       string
 	sampleRate int
 
 	listDevices bool
@@ -85,7 +87,7 @@ func run() error {
 	}
 	defer app.Close()
 
-	ebiten.SetWindowSize(screenWidth, screenHeight)
+	ebiten.SetWindowSize(windowSize())
 	ebiten.SetWindowTitle("RiffHero — " + app.song.Title)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 
@@ -93,6 +95,25 @@ func run() error {
 		return err
 	}
 	return app.persist()
+}
+
+// windowSize is the preferred size, shrunk to fit the monitor. Asking for a
+// window larger than the screen leaves the window manager to decide, and on a
+// tiling desktop what it decides is rarely what was wanted.
+func windowSize() (int, int) {
+	w, h := screenWidth, screenHeight
+	if m := ebiten.Monitor(); m != nil {
+		mw, mh := m.Size()
+		if mw > 0 && mh > 0 {
+			if limit := mw * 9 / 10; w > limit {
+				w = limit
+			}
+			if limit := mh * 9 / 10; h > limit {
+				h = limit
+			}
+		}
+	}
+	return w, h
 }
 
 func parseFlags() (options, error) {
@@ -110,6 +131,7 @@ func parseFlags() (options, error) {
 	flag.Float64Var(&o.speed, "speed", 0, "initial practice speed, 0.25..1")
 	flag.Float64Var(&o.latencyMS, "latency", -1, "round-trip latency in milliseconds, overriding the stored measurement")
 	flag.BoolVar(&o.adaptive, "progressive", false, "start with the progressive practice rule switched on")
+	flag.StringVar(&o.loop, "loop", "", "practise a bar range, e.g. 9-12")
 	flag.IntVar(&o.sampleRate, "rate", 48000, "sample rate to ask the device for")
 
 	flag.BoolVar(&o.listDevices, "list-devices", false, "print the audio devices and exit")
@@ -125,6 +147,25 @@ func parseFlags() (options, error) {
 		o.scorePath = args[0]
 	}
 	return o, nil
+}
+
+// parseBarRange reads a "9-12" bar range. Bars are one-based, as a musician
+// counts them, and the range includes both ends.
+func parseBarRange(spec string) (from, to int, err error) {
+	parts := strings.SplitN(spec, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("a loop is written as first-last, for example 9-12; got %q", spec)
+	}
+	if from, err = strconv.Atoi(strings.TrimSpace(parts[0])); err != nil {
+		return 0, 0, fmt.Errorf("first bar of %q: %w", spec, err)
+	}
+	if to, err = strconv.Atoi(strings.TrimSpace(parts[1])); err != nil {
+		return 0, 0, fmt.Errorf("last bar of %q: %w", spec, err)
+	}
+	if from < 1 || to < from {
+		return 0, 0, fmt.Errorf("%q is not a bar range", spec)
+	}
+	return from, to, nil
 }
 
 func usage() {
@@ -200,13 +241,19 @@ func runCalibration(o options, cfg config.Config) error {
 	}
 	defer host.Close()
 
-	in, err := host.FindDevice(audio.Input, pick(o.input, cfg.InputDevice))
+	in, note, err := resolveDevice(host, audio.Input, o.input, cfg.InputDevice)
 	if err != nil {
 		return err
 	}
-	out, err := host.FindDevice(audio.Output, pick(o.output, cfg.OutputDevice))
+	if note != "" {
+		fmt.Println(note)
+	}
+	out, note, err := resolveDevice(host, audio.Output, o.output, cfg.OutputDevice)
 	if err != nil {
 		return err
+	}
+	if note != "" {
+		fmt.Println(note)
 	}
 
 	fmt.Printf("Measuring the round trip on %s -> %s.\n", out.Name, in.Name)
@@ -232,6 +279,35 @@ func runCalibration(o options, cfg config.Config) error {
 	path, _ := config.Path()
 	fmt.Printf("Stored in %s\n", path)
 	return nil
+}
+
+// resolveDevice picks an endpoint, treating a flag and a stored setting very
+// differently.
+//
+// A name given on the command line is an instruction: if it matches nothing,
+// that is an error, because silently using something else is not what was
+// asked for. A name remembered from last time is only a preference, and it
+// stops matching for ordinary reasons — a different backend names the same
+// hardware differently, an interface was unplugged. Refusing to start over a
+// stale preference is how an app becomes something people stop opening.
+func resolveDevice(host *audio.Host, kind audio.Kind, flagValue, stored string) (*audio.Device, string, error) {
+	if flagValue != "" {
+		d, err := host.FindDevice(kind, flagValue)
+		return d, "", err
+	}
+	if stored != "" {
+		if d, err := host.FindDevice(kind, stored); err == nil {
+			return d, "", nil
+		}
+	}
+	d, err := host.FindDevice(kind, "")
+	if err != nil {
+		return nil, "", err
+	}
+	if stored != "" {
+		return d, fmt.Sprintf("the remembered %s device %q is not here; using %q", kind, stored, d.Name), nil
+	}
+	return d, "", nil
 }
 
 func openHost(o options, cfg config.Config) (*audio.Host, error) {
