@@ -63,8 +63,13 @@ func Parse(data []byte, clock practice.Clock) (*practice.Song, error) {
 	tc := newTickClock(division, tempoChanges)
 	songEndTick := lastTick(tracks, tempoChanges, sigChanges)
 
+	grid, err := buildGrid(clock, tc, tempoChanges, sigChanges, songEndTick)
+	if err != nil {
+		return nil, err
+	}
+
 	song := &practice.Song{Clock: clock}
-	song.Grid = practice.BuildGrid(clock, 0, buildSections(clock, tc, tempoChanges, sigChanges, songEndTick))
+	song.Grid = grid
 	song.Title = titleFrom(tracks, tempoTrackIndex)
 	song.Tracks = buildTracks(tracks, tc, clock)
 	song.Normalize()

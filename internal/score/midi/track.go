@@ -2,6 +2,7 @@ package midi
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/FullFran/riffhero/internal/practice"
 )
@@ -96,6 +97,7 @@ func parseTrack(data []byte, tempo *[]tempoChange, sig *[]sigChange) (parsedTrac
 				return pt, err
 			}
 			if ended {
+				closeDangling(&pt, active, tick)
 				return pt, nil
 			}
 		case status == 0xF0 || status == 0xF7:
@@ -116,7 +118,46 @@ func parseTrack(data []byte, tempo *[]tempoChange, sig *[]sigChange) (parsedTrac
 			return pt, fmt.Errorf("unsupported status byte 0x%02X", status)
 		}
 	}
+	closeDangling(&pt, active, tick)
 	return pt, nil
+}
+
+// closeDangling ends every note still sounding when the track's event stream
+// stops, at endTick — the End of Track tick, or the last event's tick when the
+// chunk simply runs out of bytes.
+//
+// This used to be a silent drop: the active map went out of scope with the
+// function and whatever was in it was gone. A file whose last note never gets
+// its Note Off is common enough (a truncated export, a sequencer killed
+// mid-write, a writer that leans on End of Track to cut everything off) that
+// losing the note without a word is the wrong answer. We know where it
+// started and we know where the track stops; that is a note.
+//
+// Map iteration order is random, so the survivors are ordered before they are
+// appended. Two parses of the same bytes have to produce the same score.
+func closeDangling(pt *parsedTrack, active map[uint16]int64, endTick int64) {
+	if len(active) == 0 {
+		return
+	}
+	keys := make([]uint16, 0, len(active))
+	for k := range active {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if active[keys[i]] != active[keys[j]] {
+			return active[keys[i]] < active[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	for _, k := range keys {
+		start := active[k]
+		delete(active, k)
+		// A Note On on the very last tick has nowhere to sound; a zero-length
+		// note is dropped here exactly as handleNoteEvent drops one.
+		if endTick > start {
+			pt.notes = append(pt.notes, rawNote{startTick: start, endTick: endTick, midi: uint8(k)})
+		}
+	}
 }
 
 // parseMeta reads one 0xFF meta event, already past its status byte, and
@@ -150,7 +191,7 @@ func parseMeta(r *reader, pt *parsedTrack, tempo *[]tempoChange, sig *[]sigChang
 		}
 	case metaTimeSignature:
 		// numerator, denominator as a power of two, clocks/click, 32nds/quarter.
-		// Only the first two bytes carry anything BuildGrid needs.
+		// Only the first two bytes carry anything the grid needs.
 		if len(payload) >= 2 {
 			beats := int(payload[0])
 			unit := 1 << payload[1]
