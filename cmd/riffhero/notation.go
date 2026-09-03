@@ -18,21 +18,35 @@ import (
 // staff scrolls on exactly the same timeline as the tab, so a note is at the
 // same x in both readings and the two can be shown at once.
 
-// staffFor is the five-line staff placed inside a vertical band.
+// staffReach is how far beyond the outer staff lines a note can be drawn, in
+// staff-line gaps.
+//
+// It is not a guess. A guitar's low E is written three ledger lines below the
+// staff (step -7, so 3.5 gaps), and a stem hangs 3.2 gaps from the head with a
+// note head half a gap thick on top of that. Reserving less than this is how
+// the low E ends up drawn through the tab underneath it and the high notes end
+// up behind the header.
+const staffReach = 3.5 + 3.2 + 0.5
+
+// staffFor places a five-line staff inside a vertical band, leaving room for
+// everything that hangs off it.
 func staffFor(top, bottom float64) ui.StaffLayout {
-	// Divided by ten rather than by four: the staff is five lines, but the
-	// music runs several ledger lines either side of them and needs the room.
-	// A guitar's low E is three below and this phrase goes two above.
-	gap := (bottom - top) / 10
+	// The staff itself is four gaps tall; the reach either side is what makes
+	// the divisor eleven rather than four.
+	gap := (bottom - top) / (4 + 2*staffReach)
 	switch {
 	case gap > 20:
 		gap = 20
-	case gap < 5:
-		gap = 5
+	case gap < 4:
+		gap = 4
 	}
-	// Centred in the band, leaving the ledger lines room either side.
-	height := 4 * gap
-	return ui.StaffLayout{Top: top + ((bottom-top)-height)/2, LineGap: gap}
+	return ui.StaffLayout{Top: top + ((bottom-top)-4*gap)/2, LineGap: gap}
+}
+
+// staffExtent is the vertical space a staff really occupies, ledger lines and
+// stems included.
+func staffExtent(s ui.StaffLayout) (top, bottom float64) {
+	return s.LineY(0) - staffReach*s.LineGap, s.LineY(4) + staffReach*s.LineGap
 }
 
 // gutterX is where the reading area starts: everything left of it belongs to

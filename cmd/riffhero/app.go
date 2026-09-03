@@ -62,15 +62,16 @@ type app struct {
 
 	width, height int
 
-	quitting    bool
-	calibrated  bool
-	loop        practice.Loop
-	showHelp    bool
-	lastNote    practice.DetectedNote
-	hasNote     bool
-	notice      string
-	noticeTicks int
-	warnings    []string
+	quitting       bool
+	backingCleared bool
+	calibrated     bool
+	loop           practice.Loop
+	showHelp       bool
+	lastNote       practice.DetectedNote
+	hasNote        bool
+	notice         string
+	noticeTicks    int
+	warnings       []string
 
 	// The menu side: which screen is up, and the state each of them keeps.
 	mode     mode
@@ -129,6 +130,16 @@ func build(o options, cfg config.Config) (*app, error) {
 	a.spelling = spellingFor(cfg.Spelling)
 	a.channel = channelFor(cfg.InputChannel)
 
+	// The transport is settled before the device opens, not after. The render
+	// goroutine fills its whole ring within milliseconds of the stream
+	// starting, so a speed or a loop applied afterwards leaves eighty-five
+	// milliseconds of the wrong bar at the wrong speed queued up to play on
+	// the first press of the space bar.
+	a.startScripted()
+	if err := a.applyPlayheadSettings(); err != nil {
+		return nil, err
+	}
+
 	// A missing or busy sound card is not a reason to refuse to start. The
 	// scripted path still shows the score, the transport and the scoring, and
 	// the warning says exactly what was lost.
@@ -138,14 +149,7 @@ func build(o options, cfg config.Config) (*app, error) {
 	if a.head == nil {
 		a.startScripted()
 	}
-
 	a.buildRunner()
-	if err := a.applyInitialSettings(); err != nil {
-		// The stream is already open by this point, and the caller only gets a
-		// nil app to close.
-		a.Close()
-		return nil, err
-	}
 	return a, nil
 }
 
@@ -228,7 +232,14 @@ func (a *app) buildRunner() {
 	a.runner = practice.NewRunner(a.head, a.detector(), cfg)
 }
 
-func (a *app) applyInitialSettings() error {
+// applyPlayheadSettings puts the speed and the A-B region on the playhead.
+//
+// It runs before the device opens, and that ordering is the point. The render
+// goroutine fills its whole output ring within milliseconds of the stream
+// starting; a speed or a region applied afterwards leaves eighty-five
+// milliseconds of the wrong bar at the wrong speed already queued to play on
+// the first press of the space bar. openStream carries all of it across.
+func (a *app) applyPlayheadSettings() error {
 	speed := a.opts.speed
 	if speed <= 0 {
 		speed = a.cfg.Speed
@@ -252,7 +263,7 @@ func (a *app) applyInitialSettings() error {
 	}
 	start, end := a.song.Grid.Span(from-1, to-1)
 	a.loop = practice.Loop{A: start, B: end, Enabled: true}
-	a.runner.SetLoop(a.loop)
+	a.head.SetLoop(a.loop)
 	a.head.Restart()
 	return nil
 }
@@ -367,7 +378,17 @@ func (a *app) persist() error {
 	cfg := a.cfg
 	cfg.Speed = a.head.Speed()
 	cfg.Notation = a.notation
-	cfg.Score, cfg.Backing, cfg.Track = a.scorePath, a.backingPath, a.track
+	cfg.Track = a.track
+	// Only overwrite a remembered path when this run actually had one. A run
+	// with no sound card never loads the backing track, and writing the empty
+	// result back would forget it — every other device-derived field here is
+	// already guarded the same way.
+	if a.scorePath != "" || a.opts.scorePath != "" {
+		cfg.Score = a.scorePath
+	}
+	if a.backingPath != "" || a.backingCleared {
+		cfg.Backing = a.backingPath
+	}
 	if a.runner != nil {
 		cfg.Progressive = a.runner.Adaptive()
 	}

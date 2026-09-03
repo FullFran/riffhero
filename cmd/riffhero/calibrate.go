@@ -85,7 +85,10 @@ func (a *app) updateCalibration() {
 		a.acceptCalibration()
 	case len(buttons) > 1 && buttons[1].clicked():
 		a.openSettings()
-	case !a.calib.done && start:
+	case start && (!a.calib.done || a.calib.err != ""):
+		// A failed measurement draws a START button, and it has to work: this
+		// is the first-attempt path for a feature whose first attempt normally
+		// fails, and an inert retry button leaves ESC as the only way out.
 		a.startCalibration()
 	}
 }
@@ -227,6 +230,6 @@ func (a *app) drawCalibrationResult(screen *ebiten.Image, y int) {
 	drawDim(screen, fmt.Sprintf("confidence %.0f%%, peak %.0f dBFS", r.Confidence*100, r.PeakDB), 40, y+40+lineH)
 
 	if r.Confidence < 0.6 {
-		drawTinted(screen, "low confidence — try a loopback, or turn the output up", 40, y+40+2*lineH, menuAccent)
+		drawTinted(screen, "low confidence: try a loopback, or turn the output up", 40, y+40+2*lineH, menuAccent)
 	}
 }

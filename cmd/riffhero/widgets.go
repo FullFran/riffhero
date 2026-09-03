@@ -306,8 +306,14 @@ func writeAt(screen *ebiten.Image, text string, x, y int) {
 
 func textWidth(text string) float64 { return float64(len([]rune(text)) * glyphW) }
 
-// clip shortens a label to fit, marking that it was cut. A file name that runs
-// off the edge of its row is worse than one that admits it is too long.
+// clip shortens a label to fit, marking that it was cut with a ">".
+//
+// A file name that runs off the edge of its row is worse than one that admits
+// it is too long — and the marker is ASCII because Ebiten's debug font is a
+// 32-by-8 atlas of the first 256 code points. Anything past U+00FF draws
+// nothing at all and still advances the cursor, so an ellipsis is three holes
+// and an em dash is one. Every string that reaches the screen has to stay
+// inside Latin-1.
 func clip(text string, cells int) string {
 	r := []rune(text)
 	switch {
@@ -321,5 +327,5 @@ func clip(text string, cells int) string {
 	case cells == 1:
 		return string(r[:1])
 	}
-	return string(r[:cells-1]) + "…"
+	return string(r[:cells-1]) + ">"
 }
