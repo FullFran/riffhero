@@ -1,0 +1,122 @@
+name: ci
+
+# Every pull request and every push to main runs the full check matrix below.
+#
+# The one thing that cannot be run the same way here is anything in
+# cmd/riffhero: Ebitengine opens its window driver in a package init, so the
+# whole package - tests included - panics the moment it is loaded without a
+# display. That is not a test that touches the UI, it is the import itself.
+# Hence xvfb, and hence the split between the `check` and `app` jobs below.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Everything under internal/ builds and tests with no display and no audio
+  # device. It is the bulk of the project and it is worth keeping fast.
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./internal/...
+
+      - name: Test (race)
+        run: go test -race ./internal/...
+
+  # cmd/riffhero needs the X11 and OpenGL headers to build and a display to
+  # load. The dry run is the real smoke test: it drives the whole practice
+  # loop - importer, timeline, detector, scoring, the progressive rule - and
+  # fails loudly if nothing scores.
+  app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install the build and display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev \
+            libxxf86vm-dev libgl1-mesa-dev libasound2-dev pkg-config xvfb
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: xvfb-run -a go test ./cmd/...
+
+      - name: Build
+        env:
+          CGO_ENABLED: 1
+        run: go build -o bin/riffhero ./cmd/riffhero
+
+      # Both languages, because a translation that drops a printf verb prints
+      # "%!d(MISSING)" and nothing else would notice.
+      - name: Dry run
+        run: |
+          xvfb-run -a ./bin/riffhero --dry-run --lang en --loop 1-2 --progressive
+          xvfb-run -a ./bin/riffhero --dry-run --lang es --loop 1-2 --progressive
+
+  # A release is built on Windows with a real toolchain, and the first time
+  # anyone finds out whether that still works should not be the day a tag is
+  # pushed. malgo vendors C, so Windows needs a C compiler even though
+  # Ebitengine itself has not since it moved to purego.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up mingw-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+
+      - name: Build
+        shell: msys2 {0}
+        env:
+          CGO_ENABLED: 1
+          CC: x86_64-w64-mingw32-gcc
+        run: go build -o riffhero.exe ./cmd/riffhero
