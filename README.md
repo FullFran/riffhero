@@ -67,6 +67,22 @@ the whole loop can be seen working on a machine with no sound card:
 make demo
 ```
 
+And with no window either, which is how the whole loop is checked in a
+terminal or in CI:
+
+```bash
+$ riffhero --dry-run --loop 1-2 --progressive --speed 0.5
+Pentatonic warm-up
+track 1 of 1: Guitar, Standard, 20 notes
+3 bars, 0:09.7, 16 notes in scope
+
+lap 1: 75% accuracy, repeat -> 0.50x
+lap 2: 75% accuracy, repeat -> 0.50x
+
+perfect 2  good 1  miss 1  extra 0
+accuracy 75%  best combo x2  4 of 16 resolved
+```
+
 ## Controls
 
 | Key | |
@@ -106,6 +122,8 @@ riffhero [score] [flags]
   --list-devices     print the audio devices and exit
   --list-tracks      print the score's tracks and exit
   --calibrate        measure the round-trip latency, store it and exit
+  --dry-run          run the practice loop with no window and no device,
+                     print the scoreboard and exit
   --rate N           sample rate to ask the device for
 ```
 
@@ -135,6 +153,7 @@ make deps         # print the system packages cmd/riffhero needs
 make build        # build the app (needs those packages)
 make run          # build and launch; ARGS="song.gp" to pass flags
 make demo         # the built-in phrase with a scripted player
+make smoke        # the whole loop with no window and no device
 make help         # list every target
 ```
 

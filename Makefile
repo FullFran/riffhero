@@ -15,7 +15,7 @@ GL  := scripts/with-system-gl.sh
 APT_PACKAGES := libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
 	libxi-dev libxxf86vm-dev libgl1-mesa-dev libasound2-dev
 
-.PHONY: help check check-app check-audio vet test race build run demo clean tidy deps
+.PHONY: help check check-app check-audio vet test race build run demo smoke clean tidy deps
 
 help: ## Show the available targets
 	@awk 'BEGIN{FS=":.*##"} /^[a-z][a-z-]*:.*##/{printf "  %-7s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -46,6 +46,9 @@ run: build ## Build and launch the app
 
 demo: build ## Launch the built-in phrase with a scripted player, no hardware
 	$(GL) ./$(BIN) --no-audio
+
+smoke: build ## Run the whole practice loop with no window and no device
+	./$(BIN) --dry-run $(ARGS)
 
 tidy: ## Tidy the module
 	go mod tidy
