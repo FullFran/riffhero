@@ -36,6 +36,9 @@ type Player struct {
 	// seeked away from.
 	seekTarget atomic.Int64
 	seekGen    atomic.Uint32
+	// observedGen is the generation of the last stamp accepted, so a jump can
+	// be told apart from a lap: both move the position backwards.
+	observedGen atomic.Uint32
 }
 
 var _ practice.Playhead = (*Player)(nil)
@@ -117,6 +120,11 @@ func (p *Player) SetLoop(l practice.Loop) {
 // Seek jumps the playhead. The position moves immediately so the view responds
 // to the keystroke, and the generation bump tells the renderer to throw away
 // what it was about to produce.
+//
+// The generation goes up first. A callback landing between the position store
+// and the bump would still match the old generation, pass observe's staleness
+// guard and put the pre-seek position back; bumping first makes that same
+// guard reject it.
 func (p *Player) Seek(to practice.Frame) {
 	if to < 0 {
 		to = 0
@@ -124,9 +132,9 @@ func (p *Player) Seek(to practice.Frame) {
 	if end := p.End(); to > end {
 		to = end
 	}
+	p.seekGen.Add(1)
 	p.seekTarget.Store(int64(to))
 	p.pos.Store(int64(to))
-	p.seekGen.Add(1)
 }
 
 // Restart returns to the start of the loop region, or of the song.
@@ -148,12 +156,29 @@ func (p *Player) SeekTarget() practice.Frame { return practice.Frame(p.seekTarge
 
 // observe is called by the audio callback with the stamp of the last frame the
 // device actually received. Stamps from a superseded generation are dropped.
+//
+// A lap is counted here, and that placement is the whole point. The renderer
+// wraps its cursor a whole output buffer ahead of what is being heard — about
+// 70 ms — so counting there told the scoreboard a lap had finished while the
+// playhead was still short of B. The scoring session would reset for the new
+// lap and then immediately expire every note in it, because they were all
+// still behind a playhead that had not wrapped yet. Every lap after the first
+// scored zero, and with the progressive rule on, the speed fell to the floor.
+//
+// The position going backwards is what a wrap looks like from here. A seek
+// looks the same, and is told apart by its generation: the first stamp of a
+// new generation is a jump, not a lap.
 func (p *Player) observe(s stamp) {
-	if s.gen != p.seekGen.Load() {
+	gen := p.seekGen.Load()
+	if s.gen != gen {
 		return
 	}
-	p.pos.Store(s.pos)
-}
 
-// countLap is called by the renderer when it wraps the A-B region.
-func (p *Player) countLap() { p.laps.Add(1) }
+	prev := p.pos.Load()
+	p.pos.Store(s.pos)
+
+	if p.observedGen.Load() == gen && s.pos < prev && p.Loop().Active() {
+		p.laps.Add(1)
+	}
+	p.observedGen.Store(gen)
+}

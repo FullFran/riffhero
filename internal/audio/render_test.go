@@ -27,7 +27,10 @@ func unityGain() *atomic.Uint64 {
 	return &g
 }
 
-// pump runs the renderer and collects the stamps of every frame it produced.
+// pump runs the renderer and drains the ring the way the audio callback does,
+// stamp by stamp — including handing each stamp to the player, which is where
+// the position and the lap count come from. A test that only drained the ring
+// would miss anything that depends on the two halves being connected.
 func pump(t *testing.T, r *renderer, ring *outRing, rounds int) []stamp {
 	t.Helper()
 	var got []stamp
@@ -35,11 +38,15 @@ func pump(t *testing.T, r *renderer, ring *outRing, rounds int) []stamp {
 
 	for i := 0; i < rounds; i++ {
 		r.fill()
+		if !r.player.Playing() {
+			continue // the callback leaves the ring alone while stopped
+		}
 		for {
 			n, first, _, ok := ring.Pop(one, 1)
 			if !ok || n == 0 {
 				break
 			}
+			r.player.observe(first)
 			got = append(got, first)
 		}
 	}
@@ -61,6 +68,7 @@ func TestRendererFillsTheRingWhilePaused(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		r.fill()
 	}
+	_ = p
 	if ring.Len() == 0 {
 		t.Fatal("a paused renderer left the ring empty; play would start on an underrun")
 	}
@@ -281,5 +289,103 @@ func TestRendererPlaysIntoTheRegionBeforeLooping(t *testing.T) {
 	}
 	if p.Laps() == 0 {
 		t.Fatal("reaching B should have wrapped at least once")
+	}
+}
+
+func TestLapIsCountedWhereItIsHeardNotWhereItIsRendered(t *testing.T) {
+	// The renderer wraps its cursor a whole output buffer — about 70 ms —
+	// before the device plays the wrap. Counting the lap there told the
+	// scoreboard a lap had finished while the playhead was still short of B;
+	// the scoring session reset for the new lap and then immediately expired
+	// every note in it, because they were all still ahead of a playhead that
+	// had not wrapped. Every lap after the first scored zero.
+	clock := practice.Clock{SampleRate: testRate}
+	r, ring, p := newTestRenderer(rampBacking(testRate*2), clock.Frames(2))
+	a, b := clock.Frames(0.2), clock.Frames(0.4)
+	p.SetLoop(practice.Loop{A: a, B: b, Enabled: true})
+	p.Restart()
+	p.Play()
+
+	one := make([]float32, 2)
+	countedAt := practice.Frame(-1)
+
+	for round := 0; round < 80 && countedAt < 0; round++ {
+		r.fill()
+		for {
+			n, first, _, ok := ring.Pop(one, 1)
+			if !ok || n == 0 {
+				break
+			}
+			before := p.Laps()
+			p.observe(first)
+			if p.Laps() > before {
+				countedAt = p.Position()
+				break
+			}
+		}
+	}
+
+	if countedAt < 0 {
+		t.Fatal("no lap was counted")
+	}
+	// The lap must be counted with the playhead already back at the top of the
+	// region, not still approaching its end.
+	if countedAt >= b {
+		t.Fatalf("lap counted at %d, which is not inside the region", countedAt)
+	}
+	if span := countedAt - a; span > clock.Frames(0.02) {
+		t.Fatalf("lap counted at %d, %d frames past the region start; it should fire on the wrap",
+			countedAt, span)
+	}
+}
+
+func TestLoopSeamIsCleanWhateverTheRegionLength(t *testing.T) {
+	// The fade used to be divided by its nominal length rather than its own.
+	// A region whose length is not a multiple of the chunk size leaves a short
+	// final chunk — under a quarter of the time, shorter than the fade — and
+	// the ramp then opened partway down instead of at unity. A step of -16 dB
+	// is exactly the click the fade exists to remove, on the seam heard most.
+	clock := practice.Clock{SampleRate: testRate}
+
+	src := make([]float32, testRate*2)
+	for i := 0; i < testRate; i++ {
+		v := float32(math.Sin(2 * math.Pi * 100 * float64(i) / testRate))
+		src[i*2], src[i*2+1] = v, v
+	}
+
+	// Lengths chosen to leave awkward remainders against renderChunkFrames.
+	for _, length := range []practice.Frame{20, 130, 511, 512, 513, 777, 2049} {
+		p := NewPlayer(clock, clock.Frames(1))
+		ring := newOutRing(outRingFrames)
+		r := newRenderer(p, ring, src, testRate, unityGain())
+		p.SetLoop(practice.Loop{A: 2400, B: 2400 + length, Enabled: true})
+		p.Restart()
+		p.Play()
+
+		var prev float32
+		first := true
+		var maxJump float32
+		buf := make([]float32, 2)
+		for round := 0; round < 60; round++ {
+			r.fill()
+			for {
+				n, _, _, ok := ring.Pop(buf, 1)
+				if !ok || n == 0 {
+					break
+				}
+				if !first {
+					if j := float32(math.Abs(float64(buf[0] - prev))); j > maxJump {
+						maxJump = j
+					}
+				}
+				prev, first = buf[0], false
+			}
+		}
+		if first {
+			t.Fatalf("region of %d frames produced no audio", length)
+		}
+		if maxJump > 0.05 {
+			t.Fatalf("region of %d frames: largest jump %v; the seam is clicking", length, maxJump)
+		}
 	}
 }

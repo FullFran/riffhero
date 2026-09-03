@@ -156,3 +156,20 @@ func TestTimeMapReadsWhileBeingWritten(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestTimeMapDoesNotStretchAnUnderrunAcrossTheBlock(t *testing.T) {
+	// When the ring ran dry part-way through a callback, only the frames it
+	// supplied moved the song; the rest went out as silence. Claiming the
+	// whole block advanced linearly mapped input captured during that silence
+	// to a position that was never played.
+	m := NewTimeMap(16)
+	m.Push(0, 60, 1000, 1060, true) // the 60 frames the ring supplied
+	m.Push(60, 40, 0, 0, false)     // the 40 it could not
+
+	if got, ok := m.Lookup(30); !ok || got != 1030 {
+		t.Fatalf("inside the supplied part: %d ok=%v, want 1030", got, ok)
+	}
+	if _, ok := m.Lookup(80); ok {
+		t.Fatal("a position captured during the silence resolved to a song position")
+	}
+}

@@ -52,9 +52,11 @@ type Config struct {
 	Backing []float32
 
 	// Volume is the backing level and Monitor is how much of the captured
-	// guitar is mixed into the output, both 0..1. Monitoring is off by default:
-	// with an amp in the room it is an echo, and it is only wanted when the
-	// guitar goes straight into an interface.
+	// guitar is mixed into the output, both 0..1. Zero means silence for both,
+	// and is a setting rather than an omission — the caller states what it
+	// wants. Monitoring is off by default: with an amp in the room it is an
+	// echo, and it is only wanted when the guitar goes straight into an
+	// interface.
 	Volume  float64
 	Monitor float64
 }
@@ -65,9 +67,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.PeriodFrames <= 0 {
 		c.PeriodFrames = DefaultPeriodFrames
-	}
-	if c.Volume == 0 {
-		c.Volume = 1
 	}
 	return c
 }
@@ -402,9 +401,17 @@ func (e *Engine) onData(outBytes, inBytes []byte, frames uint32) {
 
 	if got > 0 {
 		e.player.observe(last)
+		// Only the frames the ring actually supplied moved the song; anything
+		// after them was silence the callback filled in. Claiming the whole
+		// block advanced linearly would map input captured during an underrun
+		// to a position that was never played.
+		//
 		// songEnd is exclusive: the block covered up to one frame past the
 		// last stamp.
-		e.tmap.Push(streamStart, int64(n), first.pos, last.pos+1, true)
+		e.tmap.Push(streamStart, int64(got), first.pos, last.pos+1, true)
+		if got < n {
+			e.tmap.Push(streamStart+int64(got), int64(n-got), 0, 0, false)
+		}
 		return
 	}
 	e.tmap.Push(streamStart, int64(n), 0, 0, false)
