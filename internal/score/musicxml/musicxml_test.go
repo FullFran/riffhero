@@ -530,3 +530,241 @@ func TestParseFileReadError(t *testing.T) {
 		t.Fatal("ParseFile: want error for a missing file, got nil")
 	}
 }
+
+func TestParseDanglingTieDoesNotSwallowTheRestOfThePart(t *testing.T) {
+	// Three written whole notes on the same pitch and voice. Only the first
+	// carries a <tie type="start"/> and nothing ever carries the stop, which
+	// is what a truncated export or a sloppy hand edit looks like.
+	//
+	// The pending tie used to absorb every later note on its key regardless of
+	// whether that note continued the tie, and only an explicit stop could
+	// clear it — so all three came back as one note of triple length and the
+	// rest of the part disappeared with them.
+	const doc = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Guitar</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>1</divisions>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+      </attributes>
+      <direction><sound tempo="120"/></direction>
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <tie type="start"/>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+      </note>
+    </measure>
+    <measure number="3">
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+      </note>
+    </measure>
+  </part>
+</score-partwise>`
+
+	clock := testClock()
+	song, err := Parse([]byte(doc), clock)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	notes := song.Tracks[0].Notes
+	if len(notes) != 3 {
+		t.Fatalf("len(Notes) = %d, want 3 (an unclosed tie must not eat the following notes): %+v", len(notes), notes)
+	}
+
+	bar := clock.Frames(4.0 * 60.0 / 120.0)
+	for i, n := range notes {
+		if n.Duration != bar {
+			t.Errorf("note %d Duration = %d, want %d (one written whole note)", i, n.Duration, bar)
+		}
+		if n.Start != song.Grid[i].Start {
+			t.Errorf("note %d Start = %d, want bar %d start %d", i, n.Start, i+1, song.Grid[i].Start)
+		}
+	}
+}
+
+func TestParseTieChainStopStartContinues(t *testing.T) {
+	// The middle note of a three-note chain carries both a stop and a start.
+	// It has to keep the tie open, not close it and open a second one.
+	const doc = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Guitar</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>1</divisions>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+      </attributes>
+      <direction><sound tempo="120"/></direction>
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <tie type="start"/>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <tie type="stop"/>
+        <tie type="start"/>
+      </note>
+    </measure>
+    <measure number="3">
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <tie type="stop"/>
+      </note>
+    </measure>
+  </part>
+</score-partwise>`
+
+	clock := testClock()
+	song, err := Parse([]byte(doc), clock)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	notes := song.Tracks[0].Notes
+	if len(notes) != 1 {
+		t.Fatalf("len(Notes) = %d, want 1 (the whole chain is one note): %+v", len(notes), notes)
+	}
+	want := practice.Note{Start: 0, Duration: 3 * clock.Frames(4.0*60.0/120.0), MIDI: 60, String: 2, Fret: 1}
+	if notes[0] != want {
+		t.Errorf("tied note = %+v, want %+v", notes[0], want)
+	}
+}
+
+func TestParseUnterminatedTiesFlushInAStableOrder(t *testing.T) {
+	// Two voices open a tie at the same instant on the same pitch, and neither
+	// is ever stopped. They differ only in their tablature, so Normalize's
+	// stable sort on (Start, MIDI) cannot separate them: whatever order the
+	// leftovers are flushed in is the order the song comes out in.
+	//
+	// That flush used to be a range over a Go map. 200 runs of this document
+	// split 172/28 between the two orderings — the same bytes, two songs.
+	const doc = `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <part-list><score-part id="P1"><part-name>Guitar</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>1</divisions>
+        <time><beats>4</beats><beat-type>4</beat-type></time>
+      </attributes>
+      <direction><sound tempo="120"/></direction>
+      <note>
+        <pitch><step>G</step><octave>3</octave></pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <tie type="start"/>
+        <notations><technical><string>3</string><fret>0</fret></technical></notations>
+      </note>
+      <backup><duration>4</duration></backup>
+      <note>
+        <pitch><step>G</step><octave>3</octave></pitch>
+        <duration>4</duration>
+        <voice>2</voice>
+        <tie type="start"/>
+        <notations><technical><string>6</string><fret>15</fret></technical></notations>
+      </note>
+    </measure>
+  </part>
+</score-partwise>`
+
+	first, err := Parse([]byte(doc), testClock())
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := first.Tracks[0].Notes
+	if len(want) != 2 {
+		t.Fatalf("len(Notes) = %d, want 2: %+v", len(want), want)
+	}
+	if want[0].String == want[1].String {
+		t.Fatalf("the two notes must differ in tablature or the ordering is unobservable: %+v", want)
+	}
+
+	// The ties are opened in document order, so voice 1's note comes first.
+	if want[0].String != 3 || want[1].String != 6 {
+		t.Errorf("flush order = strings %d then %d, want 3 then 6 (the order the ties were opened)", want[0].String, want[1].String)
+	}
+
+	for run := 0; run < 200; run++ {
+		song, err := Parse([]byte(doc), testClock())
+		if err != nil {
+			t.Fatalf("Parse (run %d): %v", run, err)
+		}
+		got := song.Tracks[0].Notes
+		if len(got) != len(want) {
+			t.Fatalf("run %d: len(Notes) = %d, want %d", run, len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("run %d: note %d = %+v, want %+v (the same bytes must give the same song)", run, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+func TestParseMXLEntryLargerThanTheLimitIsRefused(t *testing.T) {
+	// A .mxl entry is deflated XML, and deflate reaches about 1000x: a 255 KiB
+	// upload unpacks to 256 MiB. The reader used to io.ReadAll the entry with
+	// no bound at all, so the archive decided how much memory to take.
+	//
+	// The real limit is 128 MiB; shrinking it here buys the same coverage
+	// without building a 128 MiB bomb. Nothing in this package runs in
+	// parallel, so the swap is safe.
+	defer func(saved int64) { maxScoreSize = saved }(maxScoreSize)
+	maxScoreSize = 4096
+
+	const container = `<?xml version="1.0" encoding="UTF-8"?>
+<container>
+  <rootfiles>
+    <rootfile full-path="score.xml" media-type="application/vnd.recordare.musicxml+xml"/>
+  </rootfiles>
+</container>`
+
+	// Highly compressible padding inside an XML comment: small on disk, well
+	// past the limit once inflated, and still a valid document if it ever got
+	// that far.
+	bomb := `<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1"><!--` + strings.Repeat("A", int(maxScoreSize)*4) + `-->
+  <part-list><score-part id="P1"><part-name>Guitar</part-name></score-part></part-list>
+  <part id="P1"><measure number="1"/></part>
+</score-partwise>`
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writeZipFile(t, zw, "META-INF/container.xml", container)
+	writeZipFile(t, zw, "score.xml", bomb)
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zip Close: %v", err)
+	}
+
+	if int64(buf.Len()) > maxScoreSize {
+		t.Fatalf("the compressed archive is %d bytes, which is not smaller than the limit it has to defeat", buf.Len())
+	}
+
+	_, err := Parse(buf.Bytes(), testClock())
+	if err == nil {
+		t.Fatal("Parse: want an error for an oversized .mxl entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("error = %q, want it to say the entry is too large", err.Error())
+	}
+}

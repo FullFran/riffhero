@@ -23,10 +23,11 @@ const (
 	graceNoteFraction = 0.125
 )
 
-// build turns a parsed document into the domain model. It never fails on its
-// own: every field it cannot determine just falls back to a sane default, so
-// a malformed or sparse score degrades gracefully instead of erroring out
-// after the XML has already been accepted.
+// build turns a parsed document into the domain model. Almost nothing here
+// fails: every field it cannot determine falls back to a sane default, so a
+// malformed or sparse score degrades gracefully instead of erroring out after
+// the XML has already been accepted. The one exception is a repeat structure
+// that does not terminate, which cannot be defaulted away — see expandRepeats.
 func build(doc scorePartwiseXML, clock practice.Clock) (*practice.Song, error) {
 	song := &practice.Song{
 		Clock:  clock,
@@ -40,10 +41,18 @@ func build(doc scorePartwiseXML, clock practice.Clock) (*practice.Song, error) {
 		partMeta[sp.ID] = sp
 	}
 
-	song.Grid = buildGrid(doc.Parts, clock)
+	// The played order is resolved once, before anything is converted: it is a
+	// property of the score, not of a part, and the grid and every track have
+	// to agree on it or the notes and the bar map describe different songs.
+	order, err := expandRepeats(doc.Parts)
+	if err != nil {
+		return nil, err
+	}
+
+	song.Grid = buildGrid(doc.Parts, clock, order)
 
 	for _, part := range doc.Parts {
-		track := buildTrack(part, partMeta[part.ID], clock, song.Grid)
+		track := buildTrack(part, partMeta[part.ID], clock, song.Grid, order)
 		if len(track.Notes) == 0 {
 			continue
 		}
@@ -61,36 +70,40 @@ func build(doc scorePartwiseXML, clock practice.Clock) (*practice.Song, error) {
 // carry a <time> or tempo change at measure i, that change takes effect for
 // every part from measure i on.
 //
+// order is the expanded, linear sequence of measure indices from
+// expandRepeats, so a measure inside a repeat contributes one bar per pass.
+//
+// Meter and tempo are resolved differently under a repeat, on purpose. A meter
+// is a property of the written measure — it says how much music the measure
+// holds — so it is carried forward in DOCUMENT order and then looked up per
+// pass; a measure of four quarter notes does not become a 3/4 bar because the
+// music after it changed meter before jumping back. A tempo is a property of
+// the moment it is played, so it is carried forward in PLAYED order: a
+// repeated measure that restates its own tempo restates it on every pass, and
+// one that does not keeps whatever was in force when the repeat jumped back.
+// gp/timeline.go makes the same call for the same reason.
+//
 // Reusing Grid's own bar boundaries later (instead of re-deriving them from
 // notes) is what keeps note placement from drifting: BuildGrid computes each
 // bar from its section's start rather than accumulating bar by bar, so
 // rounding never compounds across a long score.
-func buildGrid(parts []partXML, clock practice.Clock) practice.Grid {
-	numMeasures := 0
-	for _, p := range parts {
-		if len(p.Measures) > numMeasures {
-			numMeasures = len(p.Measures)
-		}
-	}
+func buildGrid(parts []partXML, clock practice.Clock, order []int) practice.Grid {
+	sigs := signaturesByMeasure(parts)
 
 	bpm := defaultBPM
-	sig := practice.CommonTime
+	sections := make([]practice.Section, 0, len(order))
+	for _, measure := range order {
+		sig := practice.CommonTime
+		if measure < len(sigs) {
+			sig = sigs[measure]
+		}
 
-	sections := make([]practice.Section, 0, numMeasures)
-	for i := 0; i < numMeasures; i++ {
 		for _, p := range parts {
-			if i >= len(p.Measures) {
+			if measure >= len(p.Measures) {
 				continue
 			}
-			for _, item := range p.Measures[i].items {
-				switch item.kind {
-				case itemAttributes:
-					if item.attributes.Time != nil {
-						if s, ok := parseTimeSignature(*item.attributes.Time); ok {
-							sig = s
-						}
-					}
-				case itemTempo:
+			for _, item := range p.Measures[measure].items {
+				if item.kind == itemTempo {
 					bpm = item.tempoBPM
 				}
 			}
@@ -104,6 +117,61 @@ func buildGrid(parts []partXML, clock practice.Clock) practice.Grid {
 	}
 
 	return practice.BuildGrid(clock, 0, sections)
+}
+
+// signaturesByMeasure resolves the meter of every WRITTEN measure, in document
+// order across all parts: a measure with no <time> keeps the previous one's,
+// which is how the format avoids repeating it on every measure.
+func signaturesByMeasure(parts []partXML) []practice.TimeSignature {
+	count := 0
+	for _, p := range parts {
+		if len(p.Measures) > count {
+			count = len(p.Measures)
+		}
+	}
+
+	out := make([]practice.TimeSignature, count)
+	current := practice.CommonTime
+	for i := 0; i < count; i++ {
+		for _, p := range parts {
+			if i >= len(p.Measures) {
+				continue
+			}
+			for _, item := range p.Measures[i].items {
+				if item.kind != itemAttributes || item.attributes.Time == nil {
+					continue
+				}
+				if sig, ok := parseTimeSignature(*item.attributes.Time); ok {
+					current = sig
+				}
+			}
+		}
+		out[i] = current
+	}
+	return out
+}
+
+// divisionsByMeasure resolves the divisions in force at the START of each
+// written measure of one part, in document order.
+//
+// Divisions is the measure's own tick resolution — how many units of <duration>
+// make a quarter note — so it is emphatically NOT carried through the played
+// order the way tempo is. If it were, a measure inside a repeat would have its
+// notes re-scaled on the second pass by a <divisions> change written after it,
+// and the same written half note would come out a different length each time
+// round.
+func divisionsByMeasure(measures []measureXML) []float64 {
+	out := make([]float64, len(measures))
+	current := defaultDivisions
+	for i, m := range measures {
+		out[i] = current
+		for _, item := range m.items {
+			if item.kind == itemAttributes && item.attributes.Divisions != nil && *item.attributes.Divisions > 0 {
+				current = *item.attributes.Divisions
+			}
+		}
+	}
+	return out
 }
 
 func parseTimeSignature(t timeXML) (practice.TimeSignature, bool) {
@@ -131,9 +199,78 @@ type pendingTie struct {
 	note practice.Note
 }
 
-// buildTrack walks one <part>'s measures in document order, converting XML
-// notes into domain notes on a single shared timeline.
-func buildTrack(part partXML, meta scorePartXML, clock practice.Clock, grid practice.Grid) practice.Track {
+// tieTable holds the ties still waiting for their stop: a map for lookup, plus
+// the order they were opened in.
+//
+// The order is the whole point. Whatever is still open when the part ends gets
+// flushed, and ranging over the map to do that made the same bytes produce
+// different songs: Go randomises map iteration, practice.Song.Normalize sorts
+// stably on (Start, MIDI), so two unterminated ties sharing a start and a
+// pitch kept whatever order the map happened to hand over. Two hundred runs of
+// one such file split 172/28 between the two orderings.
+type tieTable struct {
+	byKey map[tieKey]*pendingTie
+	order []tieKey
+}
+
+func newTieTable() *tieTable {
+	return &tieTable{byKey: make(map[tieKey]*pendingTie)}
+}
+
+func (t *tieTable) pending(k tieKey) (*pendingTie, bool) {
+	p, ok := t.byKey[k]
+	return p, ok
+}
+
+// open starts a tie on k. Callers always close whatever was already there
+// first; the guard is only so a re-open cannot list the same key twice.
+func (t *tieTable) open(k tieKey, n practice.Note) {
+	if _, ok := t.byKey[k]; !ok {
+		t.order = append(t.order, k)
+	}
+	t.byKey[k] = &pendingTie{note: n}
+}
+
+func (t *tieTable) close(k tieKey) {
+	if _, ok := t.byKey[k]; !ok {
+		return
+	}
+	delete(t.byKey, k)
+	for i, key := range t.order {
+		if key == k {
+			t.order = append(t.order[:i], t.order[i+1:]...)
+			break
+		}
+	}
+}
+
+// drain returns every tie still open, oldest first, and empties the table.
+func (t *tieTable) drain() []practice.Note {
+	notes := make([]practice.Note, 0, len(t.order))
+	for _, k := range t.order {
+		if p, ok := t.byKey[k]; ok {
+			notes = append(notes, p.note)
+		}
+	}
+	t.byKey = make(map[tieKey]*pendingTie)
+	t.order = nil
+	return notes
+}
+
+// buildTrack walks one <part>'s measures in PLAYED order — the expanded
+// sequence from expandRepeats, so a measure inside a repeat is converted once
+// per pass — turning XML notes into domain notes on a single shared timeline.
+//
+// Everything scoped to a measure has to behave under a repeat, and each piece
+// behaves differently. Divisions are resolved per WRITTEN measure in document
+// order (see divisionsByMeasure), so a note keeps its written length on every
+// pass. The cursor resets per measure, as it must. And the tie table is
+// carried across the whole part, which handles the case that actually bites: a
+// tie opened in the last measure before a backward repeat never meets its stop
+// on that pass, because the music jumps back instead. When that measure comes
+// round again the note it opened is flushed at its written length and a fresh
+// tie starts — which is exactly what the first pass sounds like.
+func buildTrack(part partXML, meta scorePartXML, clock practice.Clock, grid practice.Grid, order []int) practice.Track {
 	track := practice.Track{
 		Name:       meta.Name,
 		Instrument: meta.ScoreInstrument.Name,
@@ -142,8 +279,8 @@ func buildTrack(part partXML, meta scorePartXML, clock practice.Clock, grid prac
 	fretboard := practice.NewFretboard(track.Tuning)
 	tuningFound := false
 
-	divisions := defaultDivisions
-	pending := make(map[tieKey]*pendingTie)
+	divisionsAt := divisionsByMeasure(part.Measures)
+	ties := newTieTable()
 
 	// lastStart is the cursor position (in divisions) of the last note that
 	// was not itself a <chord/> member. A chord note starts there instead of
@@ -152,12 +289,20 @@ func buildTrack(part partXML, meta scorePartXML, clock practice.Clock, grid prac
 	var lastStart int64
 	haveLastStart := false
 
-	for i, meas := range part.Measures {
+	for played, measure := range order {
+		if measure >= len(part.Measures) {
+			// A part shorter than the longest one: it simply has no music
+			// where the others do. The bar still exists on the grid.
+			continue
+		}
+		meas := part.Measures[measure]
+		divisions := divisionsAt[measure]
+
 		barStart := practice.Frame(0)
 		bpm := defaultBPM
-		if i < len(grid) {
-			barStart = grid[i].Start
-			bpm = grid[i].BPM
+		if played < len(grid) {
+			barStart = grid[played].Start
+			bpm = grid[played].BPM
 		}
 
 		var cursor int64
@@ -186,7 +331,7 @@ func buildTrack(part partXML, meta scorePartXML, clock practice.Clock, grid prac
 			case itemNote:
 				lastStart, haveLastStart = placeNote(
 					&track, item.note, clock, divisions, bpm, barStart,
-					&cursor, lastStart, haveLastStart, fretboard, pending,
+					&cursor, lastStart, haveLastStart, fretboard, ties,
 				)
 			}
 		}
@@ -194,10 +339,8 @@ func buildTrack(part partXML, meta scorePartXML, clock practice.Clock, grid prac
 
 	// A tie that never reached its matching stop — a truncated score, or
 	// simply a writer's mistake — should still sound rather than vanish, so
-	// whatever duration it accumulated is emitted as-is.
-	for _, p := range pending {
-		track.Notes = append(track.Notes, p.note)
-	}
+	// whatever duration it accumulated is emitted as-is, oldest tie first.
+	track.Notes = append(track.Notes, ties.drain()...)
 
 	return track
 }
@@ -215,7 +358,7 @@ func placeNote(
 	lastStart int64,
 	haveLastStart bool,
 	fretboard *practice.Fretboard,
-	pending map[tieKey]*pendingTie,
+	ties *tieTable,
 ) (newLastStart int64, newHaveLastStart bool) {
 	grace := n.Grace != nil
 	chord := n.Chord != nil && !grace
@@ -280,20 +423,34 @@ func placeNote(
 	key := tieKey{voice: n.Voice, midi: midi}
 	started, stopped := tieFlags(n.Ties)
 
-	if p, ok := pending[key]; ok {
-		// A tied continuation does not start a new note — it only extends
-		// the duration of the one already waiting, so a chain of tied notes
-		// sounds as a single hit instead of retriggering at every barline.
-		p.note.Duration += note.Duration
-		if stopped && !started {
-			track.Notes = append(track.Notes, p.note)
-			delete(pending, key)
+	if p, ok := ties.pending(key); ok {
+		if stopped {
+			// A tied continuation does not start a new note — it only extends
+			// the duration of the one already waiting, so a chain of tied
+			// notes sounds as a single hit instead of retriggering at every
+			// barline. A note that both stops and starts is the middle of a
+			// longer chain, so the tie stays open.
+			p.note.Duration += note.Duration
+			if !started {
+				track.Notes = append(track.Notes, p.note)
+				ties.close(key)
+			}
+			return lastStart, haveLastStart
 		}
-		return lastStart, haveLastStart
+
+		// No stop on this note, so it does not continue the pending tie —
+		// something on the same (voice, pitch) key is just being played again.
+		// Folding it in regardless is how one stray <tie type="start"/> used
+		// to swallow the rest of the part: three written whole notes, only the
+		// first tied and nothing ever stopping it, came out as a single note
+		// of triple length. Flush the tie as the note it actually was and let
+		// this one stand on its own.
+		track.Notes = append(track.Notes, p.note)
+		ties.close(key)
 	}
 
 	if started {
-		pending[key] = &pendingTie{note: note}
+		ties.open(key, note)
 		return lastStart, haveLastStart
 	}
 

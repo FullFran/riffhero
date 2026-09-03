@@ -73,6 +73,12 @@ type measureItemXML struct {
 // elements are sorted by tag name instead of kept in document order.
 type measureXML struct {
 	items []measureItemXML
+
+	// barlines are kept apart from items because, unlike everything in items,
+	// they say nothing about where the cursor is: they describe the edges of
+	// the measure as a whole, and they are read before conversion starts, to
+	// work out the order the measures are played in.
+	barlines []barlineXML
 }
 
 func (m *measureXML) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
@@ -138,6 +144,12 @@ func (m *measureXML) decodeChild(d *xml.Decoder, t xml.StartElement) error {
 			return err
 		}
 		m.appendTempo(s.Tempo)
+	case "barline":
+		var b barlineXML
+		if err := d.DecodeElement(&b, &t); err != nil {
+			return err
+		}
+		m.barlines = append(m.barlines, b)
 	default:
 		if err := d.Skip(); err != nil {
 			return err
@@ -168,6 +180,39 @@ type directionXML struct {
 
 type soundXML struct {
 	Tempo string `xml:"tempo,attr"`
+}
+
+// barlineXML is one edge of a measure: the left edge when location is "left",
+// the right edge otherwise (the attribute defaults to "right"). What matters
+// here is the repeat structure hanging off it.
+//
+// BarStyle is decoded but nothing acts on it. It is the engraving of the line
+// — "light-heavy" for a final barline, "heavy-light" beside a forward repeat —
+// and a practice timeline has no engraving; it is kept because reading a
+// barline without reading its style makes the next person wonder whether it
+// was overlooked or deliberately ignored.
+type barlineXML struct {
+	Location string     `xml:"location,attr"`
+	BarStyle string     `xml:"bar-style"`
+	Repeat   *repeatXML `xml:"repeat"`
+	Ending   *endingXML `xml:"ending"`
+}
+
+// repeatXML is a repeat sign. Direction is "forward" (the section starts here)
+// or "backward" (jump back to the last forward sign); Times is how many times
+// the section is played in total and is usually absent, meaning twice.
+type repeatXML struct {
+	Direction string `xml:"direction,attr"`
+	Times     string `xml:"times,attr"`
+}
+
+// endingXML is a numbered alternate ending bracket. Number is a comma
+// separated list of the passes the bracket belongs to ("1", or "1, 2"), and
+// Type is "start" on the bracket's opening barline and "stop" or
+// "discontinue" on its closing one.
+type endingXML struct {
+	Number string `xml:"number,attr"`
+	Type   string `xml:"type,attr"`
 }
 
 type attributesXML struct {
