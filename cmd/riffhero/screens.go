@@ -43,7 +43,10 @@ func (a *app) menuColumn(count int) (x, w, top, pitch float64) {
 	}
 	x = (float64(a.width) - w) / 2
 
-	pitch = 62
+	// Room for a button and the line of explanation under it, which is drawn
+	// after every button rather than between them: a note printed before the
+	// next button is a note the next button paints over.
+	pitch = 72
 	top = float64(a.height)*0.30 - float64(count)*pitch/2
 	if min := 110.0; top < min {
 		top = min
@@ -206,12 +209,15 @@ func (a *app) drawTitle(screen *ebiten.Image) {
 	drawDim(screen, "guitar practice — plug in, play, see what landed", 40, 76)
 
 	buttons := a.titleButtons()
-	for i, b := range buttons {
+	for _, b := range buttons {
 		b.draw(screen)
-		if titleRows[i].note != nil {
-			if note := titleRows[i].note(a); note != "" {
-				drawDim(screen, clip(note, int(b.w/glyphW)), int(b.x)+2, int(b.y+b.h)+3)
-			}
+	}
+	for i, b := range buttons {
+		if titleRows[i].note == nil {
+			continue
+		}
+		if note := titleRows[i].note(a); note != "" {
+			drawDim(screen, clip(note, int(b.w/glyphW)), int(b.x)+2, int(b.y+b.h)+4)
 		}
 	}
 

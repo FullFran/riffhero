@@ -174,14 +174,76 @@ func Places() []Entry {
 	return out
 }
 
+// xdgDir resolves one of the user's well-known directories.
+//
+// The English fallback is the last resort and not the usual answer. On a
+// desktop in any other language the music folder is called Música or Musik or
+// 音楽, and guessing "Music" finds nothing — which is how a song picker ends
+// up offering only the home directory. The name lives in user-dirs.dirs, so
+// that is where it is read from.
 func xdgDir(env, home, fallback string) string {
 	if dir := os.Getenv(env); dir != "" {
+		return dir
+	}
+	if dir := userDirs(home)[env]; dir != "" {
 		return dir
 	}
 	if home == "" {
 		return ""
 	}
 	return filepath.Join(home, fallback)
+}
+
+// userDirsCache is read once: the file does not change while the app is up,
+// and Places is called every time the browser opens.
+var (
+	userDirsCache map[string]string
+	userDirsRead  bool
+)
+
+// userDirs parses ~/.config/user-dirs.dirs, whose format is documented in its
+// own header as KEY="$HOME/name" or KEY="/absolute/name" and nothing else.
+func userDirs(home string) map[string]string {
+	if userDirsRead {
+		return userDirsCache
+	}
+	userDirsRead = true
+	userDirsCache = map[string]string{}
+
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		if home == "" {
+			return userDirsCache
+		}
+		base = filepath.Join(home, ".config")
+	}
+	data, err := os.ReadFile(filepath.Join(base, "user-dirs.dirs"))
+	if err != nil {
+		return userDirsCache
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"`)
+		if value == "" {
+			continue
+		}
+		if rest, cut := strings.CutPrefix(value, "$HOME/"); cut {
+			if home == "" {
+				continue
+			}
+			value = filepath.Join(home, rest)
+		}
+		userDirsCache[strings.TrimSpace(key)] = value
+	}
+	return userDirsCache
 }
 
 // wanted reports whether a kind passes the filter. No filter means everything.
