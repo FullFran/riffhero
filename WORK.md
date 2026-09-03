@@ -18,8 +18,8 @@ speed on its own when a lap comes out clean.
 ```text
 internal/practice   the domain: frames, notes, tuning, bars, loop, speed,
                     matcher, session, runner. Imports nothing but stdlib.
-internal/dsp        ring, gate, onset, MPM, YIN, tracker, FFT, chroma,
-                    chord verifier, and the Detector that joins them.
+internal/dsp        ring, gate, onset, MPM, YIN, tracker, FFT, chord
+                    verifier, and the Detector that joins them.
 internal/audio      device, duplex engine, render goroutine, time map,
                     latency calibration.
 internal/audio/codec  wav (by hand), mp3, flac, plus rate and channel
@@ -85,6 +85,30 @@ Chords:
 - 6 Hz per bin is what sets the 171 ms window. At 4096 samples A2's search band
   swallows the B2 beside it and the wrong chord scores as well as the right one.
 
+Timing, from an adversarial review of the finished app:
+
+- a lap of the A-B region is counted where it is **heard**, in the audio
+  callback, not where the renderer wraps its cursor. The renderer runs a whole
+  output buffer ahead — about 70 ms — so counting there reset the scoreboard
+  while the playhead was still short of B, and the scoring session then expired
+  the entire fresh lap as misses. Every lap after the first scored 0%, and with
+  the progressive rule on the speed fell to the floor: the exact inverse of the
+  feature;
+- the runner reads the lap count before the position, and the playhead
+  publishes them in that order. Reversed, a new lap would rebaseline to a
+  position at the end of the region and nothing would ever expire again;
+- **playing through a note and jumping over it are not the same thing.**
+  `Session.Advance` used to expire everything behind the playhead, so a seek,
+  End, or a track change resolved every note skipped as a miss. The session is
+  told where a jump landed and leaves alone anything whose window closed before
+  it;
+- the strum tolerance is not the scoring window. Sharing one number sent
+  sixteenths at 150 BPM — 100 ms apart, inside the Good window — through the
+  chord verifier as if they were chords, at 171 ms of latency and one shared
+  onset;
+- the tablature and the pitch of a note must agree. Two importers could produce
+  one that disagreed, and the player can satisfy neither.
+
 Audio, all found by opening real devices:
 
 - JACK refuses a one-channel capture request. Its ports are the system's, and a
@@ -101,7 +125,14 @@ Audio, all found by opening real devices:
   quarters empty and underran on every period that ran late;
 - latency calibration correlates the *rise* in each envelope. A room turns a
   4 ms click into 200 ms of decay, and the envelopes themselves correlate at
-  about a third — low enough to be refused as noise.
+  about a third — low enough to be refused as noise;
+- `Seek` bumps the generation before it stores the position. The other order
+  leaves a window where a callback still matches the old generation, passes the
+  staleness guard, and puts the pre-seek position back;
+- the loop crossfade divides by its own length, not by the nominal one. A
+  region whose length is not a multiple of the render chunk leaves a short
+  final chunk, and the ramp then opens partway down — a step, which is the
+  click the fade exists to remove.
 
 Domain:
 
@@ -111,7 +142,11 @@ Domain:
   hit, not the first;
 - accuracy is `(Perfect + Good) / resolved`, and scoring is scoped to the loop
   region — otherwise every note outside it expires as a miss;
-- a lap that resolved nothing is not evidence for the progressive rule.
+- a lap that resolved nothing is not evidence for the progressive rule;
+- a sample rate read out of a file header is not to be trusted. Every
+  conversion divides by it, so 1 Hz turns a two-megabyte WAV into a
+  fifty-billion-frame allocation and a `runtime: out of memory` throw that no
+  recover can catch, and 0 Hz silently reduces a whole track to one frame.
 
 ## Building and running
 
