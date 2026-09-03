@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/FullFran/riffhero/internal/audio"
 	"github.com/FullFran/riffhero/internal/dsp"
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
 )
 
@@ -65,7 +67,7 @@ func (a *app) resolveInitialDevices() error {
 // place every note somewhere it never happened.
 func (a *app) openStream() error {
 	if a.host == nil {
-		return fmt.Errorf("no audio host")
+		return errors.New(i18n.T("no audio host"))
 	}
 	a.closeStream()
 
@@ -171,7 +173,7 @@ func (a *app) useDevices(in, out *audio.Device) error {
 			// Both are gone. Say so once and carry on without a device rather
 			// than leaving the app half-open.
 			a.closeStream()
-			return fmt.Errorf("%w (and the previous device did not come back: %v)", err, back)
+			return fmt.Errorf(i18n.T("%w (and the previous device did not come back: %v)"), err, back)
 		}
 		return err
 	}

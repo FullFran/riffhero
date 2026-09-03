@@ -1,13 +1,14 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"path/filepath"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
 	"github.com/FullFran/riffhero/internal/audio/codec"
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/library"
 	"github.com/FullFran/riffhero/internal/practice"
 	"github.com/FullFran/riffhero/internal/score"
@@ -48,7 +49,11 @@ func (a *app) openBrowser(kind library.Kind) {
 func (a *app) browseTo(dir string) {
 	listing, err := library.Scan(dir, a.browse.kind)
 	if err != nil {
-		a.browse.err = err.Error()
+		// Our own wrapping is stripped so the reason can sit inside a
+		// translated frame. What the operating system called it stays as it
+		// came: "permission denied" is not ours to translate, and guessing at
+		// it would be worse than leaving it in English.
+		a.browse.err = i18n.Tf("could not read %s: %v", dir, reason(err))
 		return
 	}
 	a.browse.err = ""
@@ -66,25 +71,33 @@ type browseRow struct {
 	clear bool   // set for the row that removes the current backing track
 }
 
+// reason is the error underneath our own wrapping.
+func reason(err error) error {
+	if inner := errors.Unwrap(err); inner != nil {
+		return inner
+	}
+	return err
+}
+
 func (a *app) browseRows() []browseRow {
 	out := make([]browseRow, 0, len(a.browse.listing.Entries)+len(a.browse.places)+1)
 
 	// Up first, then the shortcuts. It is the one most often wanted and the
 	// one every other file browser puts at the top.
 	if parent := a.browse.listing.Parent; parent != "" {
-		out = append(out, browseRow{label: "..", note: "up", dir: parent})
+		out = append(out, browseRow{label: "..", note: i18n.T("up"), dir: parent})
 	}
 	// Choosing a backing track was a one-way door: nothing called clearBacking
 	// and the choice persisted, so going back to practising unaccompanied meant
 	// editing the config file by hand.
 	if a.browse.kind == library.Backing && a.backingPath != "" {
-		out = append(out, browseRow{label: "NO BACKING TRACK", note: "practise unaccompanied", clear: true})
+		out = append(out, browseRow{label: i18n.T("NO BACKING TRACK"), note: i18n.T("practise unaccompanied"), clear: true})
 	}
 	for _, p := range a.browse.places {
 		if p.Path == a.browse.dir {
 			continue
 		}
-		out = append(out, browseRow{label: p.Name, note: "place", dir: p.Path})
+		out = append(out, browseRow{label: p.Name, note: i18n.T("place"), dir: p.Path})
 	}
 	for _, e := range a.browse.listing.Entries {
 		if e.IsDir {
@@ -203,14 +216,13 @@ func (a *app) moveBrowseCursor(count int) {
 func (a *app) drawBrowser(screen *ebiten.Image) {
 	screen.Fill(menuFace)
 
-	heading := "CHOOSE A SONG"
+	heading := i18n.T("CHOOSE A SONG")
 	if a.browse.kind == library.Backing {
-		heading = "CHOOSE A BACKING TRACK"
+		heading = i18n.T("CHOOSE A BACKING TRACK")
 	}
-	_ = heading
 	drawHeading(screen, heading, 40, 34)
 	drawDim(screen, clip(a.browse.dir, (a.width-80)/glyphW), 40, 74)
-	drawDim(screen, "ENTER open    BACKSPACE up    ESC back", 40, 92)
+	drawDim(screen, i18n.T("ENTER open    BACKSPACE up    ESC back"), 40, 92)
 
 	rows := a.browseRows()
 	buttons := a.browseButtons(rows)
@@ -222,9 +234,9 @@ func (a *app) drawBrowser(screen *ebiten.Image) {
 	case a.browse.err != "":
 		drawTinted(screen, "! "+a.browse.err, 40, a.height-40, menuBad)
 	case len(rows) == 0:
-		drawDim(screen, "nothing here that can be opened", 44, 124)
+		drawDim(screen, i18n.T("nothing here that can be opened"), 44, 124)
 	case len(rows) > len(buttons):
-		drawDim(screen, fmt.Sprintf("%d of %d", a.browse.scroll+len(buttons), len(rows)), 40, a.height-40)
+		drawDim(screen, i18n.Tf("%d of %d", a.browse.scroll+len(buttons), len(rows)), 40, a.height-40)
 	}
 	if a.noticeTicks > 0 {
 		drawTinted(screen, a.notice, 260, a.height-40, menuAccent)
@@ -235,12 +247,12 @@ func (a *app) drawBrowser(screen *ebiten.Image) {
 func (a *app) chooseScore(path string) {
 	song, err := score.Load(path, a.clock)
 	if err != nil {
-		a.tell("could not open that score: "+err.Error(), func() { a.mode = inSongs })
+		a.tell(i18n.Tf("could not open that score: %s", err), func() { a.mode = inSongs })
 		return
 	}
 	track := song.GuitarTrack()
 	if track < 0 {
-		a.tell(filepath.Base(path)+" has no playable notes", func() { a.mode = inSongs })
+		a.tell(i18n.Tf("%s has no playable notes", filepath.Base(path)), func() { a.mode = inSongs })
 		return
 	}
 
@@ -248,7 +260,7 @@ func (a *app) chooseScore(path string) {
 	a.cfg.Score, a.cfg.ScoreDir, a.cfg.Track = path, filepath.Dir(path), track
 	a.loop = practice.Loop{}
 	a.retimeSong()
-	a.showNotice("loaded " + song.Title)
+	a.showNotice(i18n.Tf("loaded %s", song.Title))
 	a.openTitle()
 }
 
@@ -256,17 +268,17 @@ func (a *app) chooseScore(path string) {
 func (a *app) chooseBacking(path string) {
 	pcm, err := codec.DecodeFile(path)
 	if err != nil {
-		a.tell("could not open that backing track: "+err.Error(), func() { a.mode = inSongs })
+		a.tell(i18n.Tf("could not open that backing track: %s", err), func() { a.mode = inSongs })
 		return
 	}
 
 	a.backingPath = path
 	a.cfg.Backing = path
 	if err := a.setBacking(pcm.Conform(a.opts.sampleRate, 2).Data); err != nil {
-		a.tell("the audio device would not restart: "+err.Error(), a.openTitle)
+		a.tell(i18n.Tf("the audio device would not restart: %s", err), a.openTitle)
 		return
 	}
-	a.showNotice(fmt.Sprintf("backing: %s, %s", filepath.Base(path), formatSeconds(pcm.Duration())))
+	a.showNotice(i18n.Tf("backing: %s, %s", filepath.Base(path), formatSeconds(pcm.Duration())))
 	a.openTitle()
 }
 
@@ -274,10 +286,10 @@ func (a *app) chooseBacking(path string) {
 func (a *app) clearBacking() {
 	a.backingPath, a.cfg.Backing = "", ""
 	if err := a.setBacking(nil); err != nil {
-		a.tell("the audio device would not restart: "+err.Error(), a.openTitle)
+		a.tell(i18n.Tf("the audio device would not restart: %s", err), a.openTitle)
 		return
 	}
-	a.showNotice("backing track removed")
+	a.showNotice(i18n.T("backing track removed"))
 }
 
 // retimeSong tells whatever is driving time how long the song now is, and

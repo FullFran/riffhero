@@ -3,13 +3,13 @@ package main
 import (
 	"fmt"
 	"math"
-	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
 	"github.com/FullFran/riffhero/internal/audio"
 	"github.com/FullFran/riffhero/internal/config"
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
 	"github.com/FullFran/riffhero/internal/ui"
 )
@@ -67,30 +67,43 @@ const (
 )
 
 var settingRows = []settingRow{
+	// First, and with a letter rather than a number.
+	//
+	// It is the one row whose meaning does not depend on being able to read
+	// the rest of the screen - the label carries both languages and the value
+	// names itself - so it is the row somebody who opened the app in the wrong
+	// language can actually find. Giving it "L" leaves every other shortcut
+	// where it was.
+	{
+		label: "LANGUAGE / IDIOMA", key: "L", kind: settingAction,
+		value: func(a *app) string { return i18n.Current().Endonym() },
+		note:  func(a *app) string { return i18n.Tf("switches to %s", i18n.Next(i18n.Current()).Endonym()) },
+		do:    func(a *app) { a.setLanguage(i18n.Next(i18n.Current())) },
+	},
 	{
 		label: "INPUT DEVICE", key: "1", kind: settingAction,
 		value: func(a *app) string {
 			if a.det == nil {
-				return "none"
+				return i18n.T("none")
 			}
 			return deviceOrDefault(a.input)
 		},
-		note: func(a *app) string { return "where the guitar is plugged in" },
+		note: func(a *app) string { return i18n.T("where the guitar is plugged in") },
 		off:  func(a *app) bool { return a.host == nil },
 		do:   func(a *app) { a.openDevices(audio.Input) },
 	},
 	{
 		label: "OUTPUT DEVICE", key: "2", kind: settingAction,
 		value: func(a *app) string { return deviceOrDefault(a.output) },
-		note:  func(a *app) string { return "where the backing track comes out" },
+		note:  func(a *app) string { return i18n.T("where the backing track comes out") },
 		off:   func(a *app) bool { return a.host == nil },
 		do:    func(a *app) { a.openDevices(audio.Output) },
 	},
 	{
 		label: "GUITAR IS ON", key: "C", kind: settingAction,
-		value: func(a *app) string { return a.channel.String() },
+		value: func(a *app) string { return channelLabel(a.channel) },
 		note: func(a *app) string {
-			return "which socket of the interface; watch the meters on the device screen"
+			return i18n.T("which socket of the interface; watch the meters on the device screen")
 		},
 		off: func(a *app) bool { return a.engine == nil },
 		do:  func(a *app) { a.setChannel(a.channel.Next()) },
@@ -99,7 +112,7 @@ var settingRows = []settingRow{
 		label: "LATENCY", key: "3", kind: settingStep,
 		value: func(a *app) string { return a.latencySummary() },
 		note: func(a *app) string {
-			return "how long the round trip takes; measure it rather than guess"
+			return i18n.T("how long the round trip takes; measure it rather than guess")
 		},
 		off:   func(a *app) bool { return a.det == nil },
 		less:  func(a *app) { a.nudgeLatency(-latencyStep) },
@@ -109,25 +122,25 @@ var settingRows = []settingRow{
 	},
 	{
 		label: "MEASURE LATENCY", key: "4", kind: settingAction,
-		value: func(a *app) string { return "run the click test" },
+		value: func(a *app) string { return i18n.T("run the click test") },
 		off:   func(a *app) bool { return a.host == nil },
 		do:    func(a *app) { a.openCalibration() },
 	},
 	{
 		label: "READING", key: "5", kind: settingAction,
-		value: func(a *app) string { return a.notation.Label() },
-		note:  func(a *app) string { return "tablature, standard notation, or both at once" },
+		value: func(a *app) string { return i18n.T(a.notation.Label()) },
+		note:  func(a *app) string { return i18n.T("tablature, standard notation, or both at once") },
 		do:    func(a *app) { a.setNotation(a.notation.Next()) },
 	},
 	{
 		label: "ACCIDENTALS", key: "6", kind: settingAction,
 		value: func(a *app) string {
 			if a.spelling == ui.Flats {
-				return "flats"
+				return i18n.T("flats")
 			}
-			return "sharps"
+			return i18n.T("sharps")
 		},
-		note: func(a *app) string { return "how the black notes are named on the staff" },
+		note: func(a *app) string { return i18n.T("how the black notes are named on the staff") },
 		do: func(a *app) {
 			if a.spelling == ui.Flats {
 				a.spelling, a.cfg.Spelling = ui.Sharps, "sharps"
@@ -149,7 +162,7 @@ var settingRows = []settingRow{
 		label: "GUITAR MONITOR", key: "8", kind: settingStep,
 		value: func(a *app) string { return percent(a.monitorSetting()) },
 		note: func(a *app) string {
-			return "mixes the guitar into the output; leave off with an amp, or with direct monitoring on the interface"
+			return i18n.T("mixes the guitar into the output; leave off with an amp, or with direct monitoring on the interface")
 		},
 		off:   func(a *app) bool { return a.engine == nil },
 		less:  func(a *app) { a.nudgeMonitor(-monitorStep) },
@@ -178,7 +191,7 @@ var settingRows = []settingRow{
 	},
 	{
 		label: "PROGRESSIVE PRACTICE", key: "P", kind: settingToggle,
-		note: func(a *app) string { return "a clean lap of the loop speeds the next one up" },
+		note: func(a *app) string { return i18n.T("a clean lap of the loop speeds the next one up") },
 		on:   func(a *app) bool { return a.runner.Adaptive() },
 		do: func(a *app) {
 			a.runner.SetAdaptive(!a.runner.Adaptive())
@@ -290,7 +303,7 @@ func (a *app) settingButtons() []button {
 }
 
 func (a *app) backButton() button {
-	return button{x: 40, y: float64(a.height) - 62, w: 180, h: 44, label: "BACK", key: "ESC"}
+	return button{x: 40, y: float64(a.height) - 62, w: 180, h: 44, label: i18n.T("BACK"), key: "ESC"}
 }
 
 func (a *app) updateSettings() {
@@ -357,8 +370,8 @@ func (a *app) updateSettings() {
 
 func (a *app) drawSettings(screen *ebiten.Image) {
 	screen.Fill(menuFace)
-	drawHeading(screen, "SETTINGS", 40, 34)
-	drawDim(screen, "click, or press the key on the left; SHIFT steps a value down", 40, 78)
+	drawHeading(screen, i18n.T("SETTINGS"), 40, 34)
+	drawDim(screen, i18n.T("click, or press the key on the left; SHIFT steps a value down"), 40, 78)
 
 	for i, r := range settingRows {
 		if !a.settingVisible(i) {
@@ -370,7 +383,7 @@ func (a *app) drawSettings(screen *ebiten.Image) {
 
 		switch r.kind {
 		case settingStep:
-			s := stepper{x: x, y: y, w: w, h: h, label: r.label, value: r.value(a), key: r.key, off: disabled}
+			s := stepper{x: x, y: y, w: w, h: h, label: i18n.T(r.label), value: r.value(a), key: r.key, off: disabled}
 			if r.atMin != nil {
 				s.atMin = disabled || r.atMin(a)
 			}
@@ -379,7 +392,7 @@ func (a *app) drawSettings(screen *ebiten.Image) {
 			}
 			s.draw(screen)
 		case settingToggle:
-			t := toggle{x: x, y: y, w: w, h: h, label: r.label, on: r.on(a), key: r.key}
+			t := toggle{x: x, y: y, w: w, h: h, label: i18n.T(r.label), on: r.on(a), key: r.key}
 			t.draw(screen)
 		default:
 			b := button{x: x, y: y, w: w, h: h, off: disabled, key: r.key}
@@ -388,7 +401,7 @@ func (a *app) drawSettings(screen *ebiten.Image) {
 			if disabled {
 				ink = buttonOffInk
 			}
-			drawTinted(screen, r.label, int(x)+30, int(y+(h-glyphH)/2), ink)
+			drawTinted(screen, i18n.T(r.label), int(x)+30, int(y+(h-glyphH)/2), ink)
 			drawTinted(screen, r.value(a), int(x+w-textWidth(r.value(a)))-14, int(y+(h-glyphH)/2), menuAccent)
 		}
 
@@ -417,7 +430,7 @@ func (a *app) drawSettings(screen *ebiten.Image) {
 
 func (a *app) drawSettingsFooter(screen *ebiten.Image) {
 	if n := a.settingCapacity(); n < len(settingRows) {
-		drawDim(screen, fmt.Sprintf("%d-%d of %d    scroll for the rest",
+		drawDim(screen, i18n.Tf("%d-%d of %d    scroll for the rest",
 			a.settings.scroll+1, a.settings.scroll+n, len(settingRows)), 240, a.height-56)
 	}
 	if a.noticeTicks > 0 {
@@ -464,18 +477,21 @@ func (a *app) deviceRowData() []deviceRow {
 	out := make([]deviceRow, 0, len(devices)+2)
 	for i := range devices {
 		note := ""
-		if devices[i].IsDefault {
-			note = "system default"
-		}
-		if current != nil && current.ID() == devices[i].ID() {
-			note = strings.TrimSpace(note + " (in use)")
+		inUse := current != nil && current.ID() == devices[i].ID()
+		switch {
+		case devices[i].IsDefault && inUse:
+			note = i18n.T("system default (in use)")
+		case devices[i].IsDefault:
+			note = i18n.T("system default")
+		case inUse:
+			note = i18n.T("(in use)")
 		}
 		out = append(out, deviceRow{label: devices[i].Name, note: note, device: &devices[i]})
 	}
 	if a.settings.kind == audio.Input {
-		out = append(out, deviceRow{label: "NO DEVICE", note: "practise against the scripted performance", none: true})
+		out = append(out, deviceRow{label: i18n.T("NO DEVICE"), note: i18n.T("practise against the scripted performance"), none: true})
 	}
-	out = append(out, deviceRow{label: "REFRESH", note: "look again, after plugging something in", fresh: true})
+	out = append(out, deviceRow{label: i18n.T("REFRESH"), note: i18n.T("look again, after plugging something in"), fresh: true})
 	return out
 }
 
@@ -542,14 +558,14 @@ func (a *app) updateDevices() {
 	switch picked := data[chosen]; {
 	case picked.fresh:
 		a.refreshDevices()
-		a.showNotice("device list refreshed")
+		a.showNotice(i18n.T("device list refreshed"))
 	case picked.none:
 		// The choice has to stick, or the next thing that reopens the stream —
 		// a measurement, an output change — brings the device straight back.
 		a.input = nil
 		a.cfg.InputDevice = ""
 		a.closeStream()
-		a.showNotice("no input device: scripted performance")
+		a.showNotice(i18n.T("no input device: scripted performance"))
 	default:
 		a.pickDevice(picked.device)
 	}
@@ -593,32 +609,32 @@ func (a *app) pickDevice(d *audio.Device) {
 		err = a.useInput(d)
 	}
 	if err != nil {
-		a.tell(d.Name+" would not open: "+err.Error(), func() { a.mode = inDevices })
+		a.tell(i18n.Tf("%s would not open: %s", d.Name, err), func() { a.mode = inDevices })
 		return
 	}
-	a.showNotice("using " + d.Name)
+	a.showNotice(i18n.Tf("using %s", d.Name))
 	a.openSettings()
 }
 
 func (a *app) drawDevices(screen *ebiten.Image) {
 	screen.Fill(menuFace)
-	heading := "INPUT DEVICE"
+	heading := i18n.T("INPUT DEVICE")
 	if a.settings.kind == audio.Output {
-		heading = "OUTPUT DEVICE"
+		heading = i18n.T("OUTPUT DEVICE")
 	}
 	drawHeading(screen, heading, 40, 34)
-	drawDim(screen, "UP DOWN choose    ENTER use    ESC back", 40, 78)
-	drawDim(screen, "backend: "+a.backendName(), 40, 94)
+	drawDim(screen, i18n.T("UP DOWN choose    ENTER use    ESC back"), 40, 78)
+	drawDim(screen, i18n.Tf("backend: %s", a.backendName()), 40, 94)
 
 	rows := a.deviceRows()
 	for _, r := range rows {
 		r.draw(screen)
 	}
 	if len(a.deviceList()) == 0 {
-		drawTinted(screen, "no devices: is anything plugged in?", 44, 124, menuBad)
+		drawTinted(screen, i18n.T("no devices: is anything plugged in?"), 44, 124, menuBad)
 	}
 	if n := len(a.deviceRowData()); n > len(rows) {
-		drawDim(screen, fmt.Sprintf("%d-%d of %d", a.settings.deviceScroll+1, a.settings.deviceScroll+len(rows), n),
+		drawDim(screen, i18n.Tf("%d-%d of %d", a.settings.deviceScroll+1, a.settings.deviceScroll+len(rows), n),
 			40, 122+len(rows)*browseRowHeight)
 	}
 	if a.settings.kind == audio.Input {
@@ -665,9 +681,9 @@ func (a *app) drawInputMeters(screen *ebiten.Image, rows int) {
 		return
 	}
 
-	drawDim(screen, "play something and watch which one moves", 40, y)
-	drawTinted(screen, "listening to the "+a.channel.String()+" input, C to change",
-		a.width-40-int(textWidth("listening to the "+a.channel.String()+" input, C to change")), y, menuAccent)
+	drawDim(screen, i18n.T("play something and watch which one moves"), 40, y)
+	listening := i18n.Tf("listening to the %s input, C to change", a.channel.String())
+	drawTinted(screen, listening, a.width-40-int(textWidth(listening)), y, menuAccent)
 	y += 24
 
 	width := float64(a.width) - 260
@@ -679,7 +695,7 @@ func (a *app) drawInputMeters(screen *ebiten.Image, rows int) {
 		if a.channel == audio.ChannelLeft && i == 1 || a.channel == audio.ChannelRight && i == 0 {
 			ink = menuDim // not the one being listened to
 		}
-		drawDim(screen, fmt.Sprintf("input %d", i+1), 40, y)
+		drawDim(screen, i18n.Tf("input %d", i+1), 40, y)
 		drawMeter(screen, 110, float64(y)+3, width, 8, dbFill(peak(peaks, i)), ink)
 		drawTinted(screen, decibels(peak(peaks, i)), a.width-130, y, menuDim)
 		y += 22
@@ -711,7 +727,7 @@ func decibels(peak float64) string {
 
 func (a *app) backendName() string {
 	if a.host == nil {
-		return "none"
+		return i18n.T("none")
 	}
 	return a.host.Backend()
 }
@@ -727,12 +743,25 @@ func (a *app) setChannel(c audio.InputChannel) {
 		a.engine.SetChannel(c)
 	}
 	a.cfg.InputChannel = c.String()
-	a.showNotice("listening to the " + c.String() + " input")
+	a.showNotice(i18n.Tf("listening to the %s input", channelLabel(c)))
+}
+
+// setLanguage switches the whole app over, and remembers the choice.
+//
+// Nothing has to be rebuilt: every screen works its text out afresh every
+// frame, so the next one drawn is already in the new language. The window
+// title is the exception - the window manager was handed a copy - so it is
+// set again here.
+func (a *app) setLanguage(l i18n.Lang) {
+	i18n.Use(l)
+	a.cfg.Language = string(l)
+	ebiten.SetWindowTitle(windowTitle(a.song.Title))
+	a.showNotice(l.Endonym())
 }
 
 func (a *app) setNotation(n config.Notation) {
 	a.notation, a.cfg.Notation = n, n
-	a.showNotice("reading: " + n.Label())
+	a.showNotice(i18n.Tf("reading: %s", i18n.T(n.Label())))
 }
 
 func (a *app) nudgeVolume(by float64) {
@@ -777,12 +806,27 @@ func (a *app) useTrack(i int) {
 	a.track, a.cfg.Track = i, i
 	a.buildRunner()
 	a.runner.SetLoop(a.loop)
-	a.showNotice("track: " + a.song.Tracks[i].Name)
+	a.showNotice(i18n.Tf("track: %s", a.song.Tracks[i].Name))
+}
+
+// channelLabel is the socket a guitar is in, as a word rather than as the
+// value the config stores. The two are deliberately different: "left" is
+// written to the config file and read back by the next run, and translating
+// what goes on disk would mean a config written in Spanish no longer loads.
+func channelLabel(c audio.InputChannel) string {
+	switch c {
+	case audio.ChannelLeft:
+		return i18n.T("left")
+	case audio.ChannelRight:
+		return i18n.T("right")
+	default:
+		return i18n.T("mix")
+	}
 }
 
 func deviceOrDefault(d *audio.Device) string {
 	if d == nil {
-		return "system default"
+		return i18n.T("system default")
 	}
 	return d.Name
 }
@@ -815,6 +859,14 @@ func keyNamed(name string) ebiten.Key {
 		return ebiten.KeyP
 	case "C":
 		return ebiten.KeyC
+	case "L":
+		return ebiten.KeyL
+	case "Y":
+		return ebiten.KeyY
+	case "N":
+		return ebiten.KeyN
+	case "S":
+		return ebiten.KeyS
 	}
 	return ebiten.KeyMax
 }

@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
 )
 
@@ -93,10 +94,10 @@ func Bar(v float64, width int) string {
 func RatingLabel(r practice.Rating) string {
 	switch r {
 	case practice.Perfect:
-		return "PERFECT"
+		return i18n.T("PERFECT")
 	case practice.Good:
-		return "GOOD"
+		return i18n.T("GOOD")
 	default:
-		return "MISS"
+		return i18n.T("MISS")
 	}
 }

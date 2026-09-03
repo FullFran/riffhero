@@ -8,6 +8,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
 	"github.com/FullFran/riffhero/internal/ui"
 )
@@ -194,7 +195,7 @@ func (a *app) drawPlayhead(screen *ebiten.Image, now practice.Frame) {
 
 	if a.runner.Session().HasRating() {
 		label := ui.RatingLabel(a.runner.Session().LastRating())
-		ebitenutil.DebugPrintAt(screen, label, int(x)-len(label)*3, int(bottom)+10)
+		ebitenutil.DebugPrintAt(screen, label, int(x-float32(textWidth(label))/2), int(bottom)+10)
 	}
 	_ = now
 }
@@ -211,7 +212,8 @@ func (a *app) drawHUD(screen *ebiten.Image) {
 	ebitenutil.DebugPrintAt(screen, hud.Score, 16, bottom-64)
 	ebitenutil.DebugPrintAt(screen, hud.Practice, 16, bottom-48)
 	ebitenutil.DebugPrintAt(screen, hud.Input, 16, bottom-32)
-	drawDim(screen, "H help    ESC menu", int(a.layout.Width)-150, bottom-16)
+	hint := i18n.T("H help    ESC menu")
+	drawDim(screen, hint, int(a.layout.Width)-16-int(textWidth(hint)), bottom-16)
 
 	a.drawMeter(screen, bottom)
 
@@ -323,33 +325,38 @@ func (a *app) hudInput() ui.HUDInput {
 	return in
 }
 
-var helpLines = []string{
-	"RiffHero",
-	"",
-	"  ESC        back to the menu",
-	"  S          settings",
-	"  N          tablature / notation / both",
-	"  SPACE      play / pause",
-	"  R          restart and clear the scoreboard",
-	"  LEFT/RIGHT seek a bar back / forward",
-	"  HOME/END   jump to the start / the end",
-	"",
-	"  A          set the loop start at the playhead",
-	"  B          set the loop end",
-	"  L          loop on / off",
-	"  X          clear the loop",
-	"",
-	"  [ ]        practice speed down / up",
-	"  P          progressive practice on / off",
-	"  - =        backing track quieter / louder",
-	"  M          guitar monitoring level",
-	"  TAB        next track",
-	"",
-	"  H          this help",
-	"  ESC        back to the menu",
-	"",
-	"Loop a hard bar, turn on progressive practice and play it clean:",
-	"the speed comes up on its own until you are at tempo.",
+// helpLines is worked out afresh every time it is drawn rather than once at
+// init: the language is settled after the package variables are, and a table
+// built too early stays in the language the process started in.
+func helpLines() []string {
+	return []string{
+		"RiffHero",
+		"",
+		i18n.T("  ESC        back to the menu"),
+		i18n.T("  S          settings"),
+		i18n.T("  N          tablature / notation / both"),
+		i18n.T("  SPACE      play / pause"),
+		i18n.T("  R          restart and clear the scoreboard"),
+		i18n.T("  LEFT/RIGHT seek a bar back / forward"),
+		i18n.T("  HOME/END   jump to the start / the end"),
+		"",
+		i18n.T("  A          set the loop start at the playhead"),
+		i18n.T("  B          set the loop end"),
+		i18n.T("  L          loop on / off"),
+		i18n.T("  X          clear the loop"),
+		"",
+		i18n.T("  [ ]        practice speed down / up"),
+		i18n.T("  P          progressive practice on / off"),
+		i18n.T("  - =        backing track quieter / louder"),
+		i18n.T("  M          guitar monitoring level"),
+		i18n.T("  TAB        next track"),
+		"",
+		i18n.T("  H          this help"),
+		i18n.T("  ESC        back to the menu"),
+		"",
+		i18n.T("Loop a hard bar, turn on progressive practice and play it clean:"),
+		i18n.T("the speed comes up on its own until you are at tempo."),
+	}
 }
 
 // drawHelp is the key list, clipped to the window rather than centred blindly.
@@ -362,7 +369,14 @@ var helpLines = []string{
 func (a *app) drawHelp(screen *ebiten.Image) {
 	const pad, lineStep = 18, 14
 
-	w := float32(460)
+	lines := helpLines()
+
+	w := float32(0)
+	for _, line := range lines {
+		if tw := float32(textWidth(line)) + 2*pad; tw > w {
+			w = tw
+		}
+	}
 	if limit := float32(a.layout.Width) - 24; w > limit {
 		w = limit
 	}
@@ -371,7 +385,7 @@ func (a *app) drawHelp(screen *ebiten.Image) {
 		x = 12
 	}
 
-	visible := len(helpLines)
+	visible := len(lines)
 	if room := (int(a.layout.Height) - 40 - 32) / lineStep; visible > room {
 		visible = room
 	}
@@ -386,10 +400,10 @@ func (a *app) drawHelp(screen *ebiten.Image) {
 
 	vector.DrawFilledRect(screen, x, y, w, h, colorPanel, false)
 	vector.StrokeRect(screen, x, y, w, h, 1, colorString, false)
-	for i, line := range helpLines[:visible] {
+	for i, line := range lines[:visible] {
 		drawTinted(screen, clip(line, int(w-2*pad)/glyphW), int(x)+pad, int(y)+16+i*lineStep, menuInk)
 	}
-	if visible < len(helpLines) {
+	if visible < len(lines) {
 		drawDim(screen, "...", int(x)+pad, int(y+h)-16)
 	}
 }

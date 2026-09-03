@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
 )
 
@@ -83,28 +84,36 @@ func BuildHUD(in HUDInput) HUD {
 	if in.Tuning.Name != "" {
 		h.Title += "   " + in.Tuning.Name
 		if in.Tuning.Capo > 0 {
-			h.Title += fmt.Sprintf(" capo %d", in.Tuning.Capo)
+			h.Title += " " + i18n.Tf("capo %d", in.Tuning.Capo)
 		}
 	}
 	if h.Title == "" {
 		h.Title = "RiffHero"
 	}
 
-	h.Transport = fmt.Sprintf("%-8s %s / %s   %s",
+	// The state column is padded to the widest word in the language actually
+	// in use. Eight was the widest English one, and "REPRODUCIENDO" is
+	// thirteen: a width measured from one string and drawn with another shoves
+	// the timecode out of its column every time the transport changes.
+	h.Transport = fmt.Sprintf("%-*s %s / %s   %s",
+		stateWidth(),
 		transportState(in),
 		Timecode(in.Clock, in.Position),
 		Timecode(in.Clock, in.End),
 		barBeat(in),
 	)
 
+	// Explicit argument indexes, because five of these verbs are the identical
+	// %-3d: a translation that reorders "perfect good miss" would otherwise
+	// print the right numbers under the wrong words, and no test could see it.
 	st := in.Stats
-	h.Score = fmt.Sprintf("accuracy %3.0f%%   combo x%-3d best x%-3d   perfect %-3d good %-3d miss %-3d   %d/%d",
+	h.Score = i18n.Tf("accuracy %3.0[1]f%%   combo x%-3[2]d best x%-3[3]d   perfect %-3[4]d good %-3[5]d miss %-3[6]d   %[7]d/%[8]d",
 		st.Accuracy*100, st.Combo, st.MaxCombo, st.Perfect, st.Good, st.Miss, st.Resolved, st.Total)
 
-	h.Practice = fmt.Sprintf("speed %s   loop %s   progressive %s   backing %s",
+	h.Practice = i18n.Tf("speed %s   loop %s   progressive %s   backing %s",
 		SpeedLabel(in.Speed), loopLabel(in), onOff(in.Adaptive), onOff(in.Backing))
 	if in.HasLap {
-		h.Practice += fmt.Sprintf("   last lap %.0f%%", in.LastLap.Accuracy*100)
+		h.Practice += i18n.Tf("   last lap %.0f%%", in.LastLap.Accuracy*100)
 	}
 
 	h.Input = inputLine(in)
@@ -117,45 +126,56 @@ func BuildHUD(in HUDInput) HUD {
 	return h
 }
 
+// stateWidth is the widest transport word in the current language, in runes.
+func stateWidth() int {
+	w := 0
+	for _, s := range []string{i18n.T("PLAYING"), i18n.T("FINISHED"), i18n.T("PAUSED")} {
+		if n := len([]rune(s)); n > w {
+			w = n
+		}
+	}
+	return w
+}
+
 func transportState(in HUDInput) string {
 	switch {
 	case in.Playing:
-		return "PLAYING"
+		return i18n.T("PLAYING")
 	case in.Finished:
-		return "FINISHED"
+		return i18n.T("FINISHED")
 	default:
-		return "PAUSED"
+		return i18n.T("PAUSED")
 	}
 }
 
 func barBeat(in HUDInput) string {
 	pos := in.Grid.Locate(in.Position)
 	if !pos.Valid {
-		return "bar -"
+		return i18n.T("bar -")
 	}
-	return fmt.Sprintf("bar %d.%d", pos.Bar, pos.Beat)
+	return i18n.Tf("bar %d.%d", pos.Bar, pos.Beat)
 }
 
 func loopLabel(in HUDInput) string {
 	l := in.Loop
 	if !l.Active() {
 		if l.A > 0 || l.B > 0 {
-			return "armed"
+			return i18n.T("armed")
 		}
-		return "off"
+		return i18n.T("off")
 	}
 	// Bars read better than seconds: a player thinks "loop bars 9 to 12", not
 	// "loop 17.3 s to 24.1 s".
 	from, to := in.Grid.BarAt(l.A), in.Grid.BarAt(l.B-1)
 	if from >= 0 && to >= 0 {
-		return fmt.Sprintf("bars %d-%d", in.Grid[from].Number, in.Grid[to].Number)
+		return i18n.Tf("bars %d-%d", in.Grid[from].Number, in.Grid[to].Number)
 	}
 	return fmt.Sprintf("%s-%s", Timecode(in.Clock, l.A), Timecode(in.Clock, l.B))
 }
 
 func inputLine(in HUDInput) string {
 	if !in.Live {
-		return "input   scripted performance (no guitar)"
+		return i18n.T("input   scripted performance (no guitar)")
 	}
 
 	// A pitch is only shown while a string is actually sounding. Leaving the
@@ -166,14 +186,16 @@ func inputLine(in HUDInput) string {
 		pitch = fmt.Sprintf("%s %s (%.0f%%)",
 			NoteName(in.Detected.MIDI), Cents(in.Detected.CentsError), in.Detected.Confidence*100)
 	}
-	line := fmt.Sprintf("input  [%s] %5.1f dB   %s", Bar(MeterLevel(in.Level), 16), in.Level, pitch)
+	line := i18n.Tf("input  [%s] %5.1f dB   %s", Bar(MeterLevel(in.Level), 16), in.Level, pitch)
 	if in.Device != "" {
 		line += "   " + in.Device
 	}
 	if in.Latency > 0 {
-		line += fmt.Sprintf("   latency %.0f ms", in.Clock.Seconds(in.Latency)*1000)
-		if !in.Calibrated {
-			line += " (estimated)"
+		ms := in.Clock.Seconds(in.Latency) * 1000
+		if in.Calibrated {
+			line += i18n.Tf("   latency %.0f ms", ms)
+		} else {
+			line += i18n.Tf("   latency %.0f ms (estimated)", ms)
 		}
 	}
 	return line
@@ -185,20 +207,24 @@ func warnings(in HUDInput) []string {
 		// A dropped sample is a hole in the timeline, not just lost audio, and
 		// from the player's side it is indistinguishable from their own
 		// mistake. Saying so is the only honest option.
-		out = append(out, fmt.Sprintf("dropped %d input samples - the analysis is falling behind", in.Dropped))
+		out = append(out, i18n.Tf(i18n.Plural(int(in.Dropped),
+			"dropped %d input sample - the analysis is falling behind",
+			"dropped %d input samples - the analysis is falling behind"), in.Dropped))
 	}
 	if in.Underruns > 0 {
-		out = append(out, fmt.Sprintf("%d audio underruns - the backing track stuttered", in.Underruns))
+		out = append(out, i18n.Tf(i18n.Plural(int(in.Underruns),
+			"%d audio underrun - the backing track stuttered",
+			"%d audio underruns - the backing track stuttered"), in.Underruns))
 	}
 	if in.Live && !in.Calibrated {
-		out = append(out, "latency not calibrated - measure it from the settings screen")
+		out = append(out, i18n.T("latency not calibrated - measure it from the settings screen"))
 	}
 	return out
 }
 
 func onOff(v bool) string {
 	if v {
-		return "on"
+		return i18n.T("on")
 	}
-	return "off"
+	return i18n.T("off")
 }

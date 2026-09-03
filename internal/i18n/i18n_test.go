@@ -110,6 +110,15 @@ func TestDetect(t *testing.T) {
 		{map[string]string{"LC_ALL": "en_GB.UTF-8", "LC_MESSAGES": "es_ES.UTF-8"}, English},
 		// An empty variable is not an answer; the next one is asked.
 		{map[string]string{"LC_ALL": "", "LANG": "es_ES.UTF-8"}, Spanish},
+		// LANGUAGE is what somebody sets to run a Spanish desktop in English,
+		// so it has to win, and it may hold a whole list of preferences.
+		{map[string]string{"LANGUAGE": "en", "LANG": "es_ES.UTF-8"}, English},
+		{map[string]string{"LANGUAGE": "es", "LANG": "en_GB.UTF-8"}, Spanish},
+		{map[string]string{"LANGUAGE": "pt:es:en", "LANG": "en_GB.UTF-8"}, Spanish},
+		{map[string]string{"LANGUAGE": "C", "LANG": "es_ES.UTF-8"}, Spanish},
+		{map[string]string{"LANGUAGE": "es-ES", "LANG": "en_GB.UTF-8"}, Spanish},
+		// A tag we do not speak stops the search: it is still an answer.
+		{map[string]string{"LANGUAGE": "de", "LANG": "es_ES.UTF-8"}, English},
 	}
 	for _, c := range cases {
 		got := Detect(func(k string) string { return c.env[k] })
@@ -175,6 +184,15 @@ func verbs(s string) []string {
 		j := i + 1
 		for j < len(s) && strings.ContainsRune("+-# 0123456789.", rune(s[j])) {
 			j++
+		}
+		// An explicit argument index, "%-3[4]d", sits between the width and
+		// the verb. It is the whole reason a translation may reorder the
+		// values, so the scanner has to step over it rather than call "[" the
+		// verb and stop looking.
+		if j < len(s) && s[j] == '[' {
+			if k := strings.IndexByte(s[j:], ']'); k > 0 {
+				j += k + 1
+			}
 		}
 		if j >= len(s) {
 			break
@@ -261,4 +279,17 @@ func sourceText(t *testing.T) string {
 		t.Fatal("read no source at all")
 	}
 	return b.String()
+}
+
+func TestVerbsReadsAnExplicitArgumentIndex(t *testing.T) {
+	// "%-3[4]d" is how a translation is allowed to move the values around, and
+	// if the scanner cannot read it the format check silently passes anything.
+	got := verbs("accuracy %3.0[1]f%%   perfect %-3[4]d   %[7]d/%[8]d")
+	want := []string{"f", "d", "d", "d"}
+	if !sameVerbs(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	if v := verbs("%% is not a value"); len(v) != 0 {
+		t.Fatalf("an escaped per cent is not a value: %v", v)
+	}
 }
