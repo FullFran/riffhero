@@ -46,6 +46,15 @@ accuracy 93%    combo x24    speed 0.75x    loop bars 9-12
   struggle and it comes down.
 - **Latency calibration** by click train, so a player who is dead on time is
   not told they are consistently late.
+- **Standard notation** as well as tablature, or both at once. Written in
+  treble clef sounding an octave down, the way guitar music is; the two
+  readings scroll on one timeline, so a note is at the same place in each.
+- **An interface**: a title screen, a file browser, a settings screen that
+  reaches every setting there is, a device picker with a meter per input, and
+  calibration without leaving the app.
+- **English and Spanish**, switched from the menu while the app is running and
+  picked up from the desktop on a first run. Every line the player reads goes
+  through one catalogue, including what the terminal modes print.
 
 ## Getting started
 
@@ -53,11 +62,46 @@ accuracy 93%    combo x24    speed 0.75x    loop bars 9-12
 make deps           # prints the system packages to install
 sudo apt install …  # what it printed
 make build
-
-./bin/riffhero --list-devices     # find your interface
-./bin/riffhero --calibrate        # measure the round trip, once
-./bin/riffhero song.gp --backing song.flac
+make run
 ```
+
+That opens the app on its title screen, and everything else is reachable from
+there: choose a song, choose a backing track, pick your interface, measure the
+latency, switch between tablature and notation, switch language. Nothing has to
+be set on the command line — the flags exist, and are listed below, but they
+are set before the guitar is plugged in and the interesting questions only
+become answerable afterwards.
+
+`make run` is the way to launch it on a machine with Nix tooling in the shell;
+it goes through `scripts/with-system-gl.sh`, which pins the app to the system
+OpenGL stack. Everywhere else `./bin/riffhero` on its own is enough, and
+`make run ARGS="song.gp --loop 9-12"` passes flags through.
+
+### Language
+
+The app speaks English and Spanish. On a first run it follows the desktop —
+`LANGUAGE`, then `LC_ALL`, `LC_MESSAGES`, `LANG`, the same order every other
+program uses — so a Spanish desktop opens in Spanish with nothing to configure.
+
+Change it from **the title screen (`6`)** or **SETTINGS → `L`**; the whole
+interface switches on the next frame, and the choice is remembered. `--lang es`
+overrides both for one run.
+
+Only the interface is translated. Note names stay as letters, because that is
+how tablature is written in every language.
+
+### With an audio interface
+
+1. Plug it in, then **SETTINGS → INPUT DEVICE**. If you opened the app first,
+   **REFRESH** finds it.
+2. On that screen each socket has its own meter. Play, watch which bar moves,
+   and press **C** until "listening to" names it. A two-input box puts the
+   guitar in one socket and leaves the other open; averaging the pair would
+   halve the guitar and add the empty socket's hum.
+3. **SETTINGS → MEASURE LATENCY**, or **5** from the title. Patch the output
+   back into the input if you can — that measurement is worth 87% confidence
+   against about 45% through a microphone.
+4. Play.
 
 No score runs the built-in phrase. No backing track keeps the timeline on the
 same clock and plays silence. `--no-audio` replays a scripted performance, so
@@ -85,8 +129,12 @@ accuracy 75%  best combo x2  4 of 16 resolved
 
 ## Controls
 
+Every button in the menus has its key printed on it, and the mouse works
+everywhere the keyboard does. While playing:
+
 | Key | |
 | --- | --- |
+| `ESC` | back to the menu |
 | `SPACE` | play / pause |
 | `R` | restart and clear the scoreboard |
 | `←` `→` | seek a bar back / forward |
@@ -98,8 +146,13 @@ accuracy 75%  best combo x2  4 of 16 resolved
 | `-` `=` | backing track quieter / louder |
 | `M` | guitar monitoring level |
 | `TAB` | next track |
+| `C` | which input the guitar is on (device screen) |
+| `N` | tablature / notation / both |
+| `S` | settings |
 | `H` | help |
-| `ESC` | quit |
+
+On the menu screens, every button prints its own key. `L` on the settings
+screen and `6` on the title screen switch language.
 
 ## Options
 
@@ -124,11 +177,18 @@ riffhero [score] [flags]
   --calibrate        measure the round-trip latency, store it and exit
   --dry-run          run the practice loop with no window and no device,
                      print the scoreboard and exit
+  --lang es          en or es; the default follows the desktop
   --rate N           sample rate to ask the device for
+  --version          print the version and exit
 ```
 
-Device selection, the measured latency and the last speed are remembered in
-`~/.config/riffhero/config.json`.
+Device selection, the measured latency, the language and the last speed are
+remembered in `~/.config/riffhero/config.json`.
+
+`--dry-run` needs an X display on Linux even though it opens no window:
+Ebitengine brings its window driver up in a package init, so the panic comes
+from loading the package rather than from anything the flag does. Under `ssh`
+or in CI, run it as `xvfb-run -a riffhero --dry-run`.
 
 ## Calibration
 
@@ -154,6 +214,7 @@ make build        # build the app (needs those packages)
 make run          # build and launch; ARGS="song.gp" to pass flags
 make demo         # the built-in phrase with a scripted player
 make smoke        # the whole loop with no window and no device
+make dist         # build and package the release archive, publishing nothing
 make help         # list every target
 ```
 
@@ -165,6 +226,30 @@ are never part of `make check`.
 system OpenGL stack. Nix-based tooling in the shell otherwise redirects driver
 discovery at `/nix/store` builds linked against a newer glibc, and the window
 never opens.
+
+## Releases
+
+Binaries for Linux and Windows are published from a pushed `vX.Y.Z` tag by
+[`.github/workflows/release.yml`](.github/workflows/release.yml). Each target
+is built on its own native runner, because the audio engine vendors C that has
+to compile for the platform and the Linux build links X11 and OpenGL through
+cgo.
+
+Before tagging:
+
+```bash
+make version-check TAG=v0.1.0   # the tag must match the version in the source
+make dist                       # the same archive CI will build
+```
+
+Then bump `defaultVersion` in `internal/buildinfo/buildinfo.go` if it has not
+been bumped, commit, and push the tag. Every release carries a `checksums.txt`
+and a build-provenance attestation:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+gh attestation verify riffhero_v0.1.0_linux_amd64.tar.gz --repo FullFran/riffhero
+```
 
 See [`PLAN.md`](PLAN.md), [`WORK.md`](WORK.md) and
 [`docs/architecture.md`](docs/architecture.md).

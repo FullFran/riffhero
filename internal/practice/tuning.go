@@ -80,23 +80,108 @@ func (t Tuning) position(midi uint8, hintFret, hintStr int) (str, fret uint8, ok
 	return str, fret, ok
 }
 
-// Fretboard places a melody on the neck one note at a time, remembering where
-// the hand was left so consecutive notes stay near each other.
+// HandSpan is how many frets past its anchor a hand covers. Five frets, one
+// per finger plus the stretch, is the position every scale shape is taught in.
+const HandSpan = 4
+
+// Fretboard places a melody on the neck one note at a time, holding the hand
+// in a position rather than merely near the last note.
+//
+// The difference is the whole point. Following the last *fret* looks right and
+// is not: going up a scale, the next note is two frets along the same string
+// and crossing to the next string is four or five away, so the cheapest move
+// is always to stay put — and a two-octave scale comes out as a single string
+// climbed from the 5th fret to the 20th, which nobody has ever played. Holding
+// a position and crossing strings inside it is what a guitarist actually does,
+// and the anchor only moves when the note genuinely will not fit.
 type Fretboard struct {
 	Tuning Tuning
-	hint   int
+	anchor int // lowest fret of the hand's position, -1 before the first note
 	hintSt int
 }
 
-func NewFretboard(t Tuning) *Fretboard { return &Fretboard{Tuning: t, hint: -1, hintSt: -1} }
+func NewFretboard(t Tuning) *Fretboard { return &Fretboard{Tuning: t, anchor: -1, hintSt: -1} }
 
-// Place resolves one pitch and moves the remembered hand position to it.
+// Place resolves one pitch and moves the hand only if it has to.
 func (f *Fretboard) Place(midi uint8) (str, fret uint8, ok bool) {
-	str, fret, ok = f.Tuning.position(midi, f.hint, f.hintSt)
-	if ok {
-		f.hint, f.hintSt = int(fret), int(str)
+	str, fret, ok = f.Tuning.inPosition(midi, f.anchor, f.hintSt)
+	if !ok {
+		return str, fret, ok
+	}
+	// An open string never moves the hand, in either direction: playing one
+	// costs no reach, so it must not drag the position back down the neck
+	// either.
+	if fret != 0 && !inHand(int(fret), f.anchor) {
+		f.anchor = anchorFor(int(fret))
+	}
+	f.hintSt = int(str)
+	return str, fret, ok
+}
+
+// Anchor is the lowest fret of the position the hand is currently in, or -1
+// before the first note.
+func (f *Fretboard) Anchor() int { return f.anchor }
+
+func inHand(fret, anchor int) bool {
+	return anchor >= 0 && fret >= anchor && fret <= anchor+HandSpan
+}
+
+// anchorFor centres a new position on the note that forced the move, so a run
+// that has to shift can carry on in either direction.
+func anchorFor(fret int) int {
+	anchor := fret - HandSpan/2
+	if anchor < 0 {
+		return 0
+	}
+	return anchor
+}
+
+// inPosition resolves a pitch, preferring anywhere the hand can already reach.
+//
+// An open string counts as reachable from any position, because it is: the
+// hand does not move to play one.
+func (t Tuning) inPosition(midi uint8, anchor, hintStr int) (str, fret uint8, ok bool) {
+	bestScore := -1
+	for s := uint8(1); s <= 6; s++ {
+		open := int(t.Strings[s-1]) + int(t.Capo)
+		f := int(midi) - open
+		if f < 0 || f > MaxFret {
+			continue
+		}
+
+		var score int
+		switch {
+		case f == 0 || inHand(f, anchor):
+			// Inside the hand: the only question left is which string, and the
+			// nearest one is the one a player reaches for.
+			score = abs(int(s)-hintStr) * 10
+			if hintStr < 0 {
+				score = f
+			}
+		default:
+			// Outside it: how far the hand would have to move, then the same
+			// tie-breaks as before.
+			score = 10000 + reachCost(f, anchor)*1000 + abs(int(s)-hintStr)*10 + f
+		}
+		if bestScore < 0 || score < bestScore {
+			bestScore, str, fret, ok = score, s, uint8(f), true
+		}
 	}
 	return str, fret, ok
+}
+
+// reachCost is how far the hand must shift to reach a fret.
+func reachCost(fret, anchor int) int {
+	if anchor < 0 {
+		return fret
+	}
+	switch {
+	case fret < anchor:
+		return anchor - fret
+	case fret > anchor+HandSpan:
+		return fret - anchor - HandSpan
+	}
+	return 0
 }
 
 // PlaceOrTranspose resolves a pitch to a position on the neck, moving it by
@@ -180,7 +265,7 @@ func (t Tuning) Sounds(midi, str, fret uint8) bool {
 }
 
 // Reset forgets the hand position.
-func (f *Fretboard) Reset() { f.hint, f.hintSt = -1, -1 }
+func (f *Fretboard) Reset() { f.anchor, f.hintSt = -1, -1 }
 
 func abs(v int) int {
 	if v < 0 {

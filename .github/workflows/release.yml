@@ -1,0 +1,227 @@
+name: release
+
+# Publish a GitHub Release whenever a version tag (vX.Y.Z) is pushed.
+#
+# Actions is the only publishing authority: never run this from a laptop.
+# Locally you prove it works with `make dist`, which produces the same
+# archives and publishes nothing.
+#
+# Both targets are built on their own native runner rather than
+# cross-compiled. That is not caution for its own sake - malgo vendors real C
+# that has to compile for the target, and Ebitengine on Linux links X11 and
+# OpenGL through cgo, so a mingw cross-build would need a whole cross sysroot.
+# Ebitengine's own CI builds its Windows binaries on Windows for the same
+# reason.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, e.g. v1.0.0"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  # The version the archives are named after and the binary reports. On a tag
+  # push that is the tag; on a manual run it is whatever was typed.
+  VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  # Cheapest possible gate, run before anything is built: a tag that disagrees
+  # with the version in the source publishes a binary that lies about itself,
+  # and the only fix afterwards is to yank the release.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The check lives with the thing it checks, so it also runs on a laptop:
+      #   RIFFHERO_RELEASE_TAG=v1.0.0 go test ./internal/buildinfo/
+      - name: The tag must match the version in the source
+        env:
+          RIFFHERO_RELEASE_TAG: ${{ env.VERSION }}
+        run: go test -run TestVersionMatchesTheReleaseTag -v ./internal/buildinfo/
+
+      # A broken workflow is only discovered when a tag is pushed, which is the
+      # worst possible moment. The whole suite that needs no display runs first.
+      - name: Test
+        run: go test ./internal/...
+
+  linux:
+    needs: verify
+    # Deliberately not ubuntu-latest. A cgo binary links against the glibc it
+    # was built on and glibc is not forward compatible, so 24.04 (2.39) would
+    # refuse to start on Debian 12 or Ubuntu 22.04. Building on 22.04 (2.35)
+    # costs nothing and covers years more machines.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # The commit and its date are stamped into the binary by Go itself,
+          # and a shallow clone with no history stamps nothing.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev \
+            libxxf86vm-dev libgl1-mesa-dev libasound2-dev pkg-config xvfb
+
+      - name: Build
+        env:
+          CGO_ENABLED: 1
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/FullFran/riffhero/internal/buildinfo.version=${VERSION}" \
+            -o dist/riffhero ./cmd/riffhero
+
+      # Ebitengine opens its window driver in a package init, so even
+      # --version needs a display on Linux. Better to find out here than in a
+      # bug report.
+      - name: Smoke
+        run: |
+          xvfb-run -a ./dist/riffhero --version
+          xvfb-run -a ./dist/riffhero --dry-run --loop 1-2
+
+      - name: Package
+        run: |
+          cp README.md dist/
+          if [ -f LICENSE ]; then cp LICENSE dist/; fi
+          tar -C dist -czf "riffhero_${VERSION}_linux_amd64.tar.gz" .
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-amd64
+          path: riffhero_*_linux_amd64.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  windows:
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Not the gcc that happens to be on the runner's PATH: the preinstalled
+      # mingw at C:\mingw64 is old enough to fail cgo links with
+      # "undefined reference to __imp___iob_func". This installs a pinned one.
+      - name: Set up mingw-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+
+      - name: Build
+        shell: msys2 {0}
+        env:
+          CGO_ENABLED: 1
+          CC: x86_64-w64-mingw32-gcc
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          # No -H=windowsgui on purpose. It would stop the console appearing
+          # on a double-click, but it does so by never attaching to one at
+          # all - including when the binary is run from an existing terminal,
+          # where --dry-run and --list-devices would then print nothing at
+          # all. Ebitengine already blank-imports ebitengine/hideconsole,
+          # which frees the console only when the process created it itself,
+          # so a double-click is clean and a terminal still works.
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/FullFran/riffhero/internal/buildinfo.version=${VERSION}" \
+            -o dist/riffhero.exe ./cmd/riffhero
+
+      - name: Smoke
+        shell: bash
+        run: ./dist/riffhero.exe --version
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Copy-Item README.md dist/
+          if (Test-Path LICENSE) { Copy-Item LICENSE dist/ }
+          Compress-Archive -Path dist/* -DestinationPath "riffhero_${env:VERSION}_windows_amd64.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-amd64
+          path: riffhero_*_windows_amd64.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  # One job publishes, once. Two matrix legs each calling the release action
+  # race each other for the same release and one of them loses its asset.
+  publish:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the release and upload the archives
+      id-token: write # the OIDC token the provenance attestation is signed with
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One file covering both platforms, so `sha256sum -c` verifies whichever
+      # archive somebody downloaded.
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum riffhero_* > checksums.txt
+          cat checksums.txt
+
+      # Says the archive was built by this workflow from this commit, rather
+      # than uploaded by hand by anyone with push access. Free, and verified
+      # with: gh attestation verify <file> --repo FullFran/riffhero
+      - name: Attest the build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/riffhero_*
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            dist/riffhero_*
+            dist/checksums.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}

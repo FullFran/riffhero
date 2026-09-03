@@ -169,7 +169,8 @@ one position instead of scattering across equally-valid alternatives.
 
 # Phase 4 — practice UX
 
-- [x] six-string horizontal tab;
+- [x] six-string horizontal tab, and standard notation as an alternative
+      reading or alongside it;
 - [x] current-position cursor;
 - [x] expected note highlight;
 - [x] detected pitch + cents;
@@ -272,6 +273,29 @@ documented in the package.
 - automatic stem separation;
 - 3D note highway;
 - generalized chord naming.
+
+---
+
+---
+
+# The interface
+
+Not a numbered phase, because Phase 4 asked only that the practice loop be
+usable from the keyboard and it was. What it did not cover is everything
+around the loop: a flag is set before the guitar is plugged in, and the
+questions worth asking — which socket, how much latency, which track, which
+reading — only become answerable afterwards.
+
+- [x] title screen, with what each choice is currently set to under it;
+- [x] a file browser for scores and backing tracks;
+- [x] a settings screen reaching every setting there is;
+- [x] a device picker, with a meter per input so the guitar's socket is
+      visible rather than guessed;
+- [x] latency measured from inside the app;
+- [x] tablature, standard notation, or both.
+
+The shape follows `inflation-rpg-go`: a mode, an open/update/draw per screen,
+widgets as values recomputed every frame, and a key on every button.
 
 ---
 
