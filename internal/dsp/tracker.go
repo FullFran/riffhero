@@ -95,11 +95,6 @@ func (t *Tracker) LatencyMillis() float64 {
 	return float64(t.span()) / float64(t.sampleRate) * 1000
 }
 
-// ChordLatencyMillis is the same figure for an expected chord.
-func (t *Tracker) ChordLatencyMillis() float64 {
-	return float64(t.chordSpan()) / float64(t.sampleRate) * 1000
-}
-
 // Push feeds a block of samples and returns any notes that became certain
 // because of it. Blocks may be any size; the tracker does its own hop
 // alignment, since an audio device picks its period size, not us.
