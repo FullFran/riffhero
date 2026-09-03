@@ -57,5 +57,10 @@ func DecodeFLAC(data []byte) (*PCM, error) {
 		}
 	}
 
+	// The rate comes straight out of the file's header and every conversion
+	// downstream divides by it. See ValidSampleRate.
+	if rate := int(stream.Info.SampleRate); !ValidSampleRate(rate) {
+		return nil, fmt.Errorf("sample rate %d is outside %d-%d Hz", rate, MinSampleRate, MaxSampleRate)
+	}
 	return &PCM{SampleRate: int(stream.Info.SampleRate), Channels: channels, Data: samples}, nil
 }

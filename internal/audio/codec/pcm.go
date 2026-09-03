@@ -5,6 +5,29 @@ package codec
 
 import "math"
 
+// MinSampleRate and MaxSampleRate bound what is accepted as a sample rate.
+//
+// The rate is a field in a file header, so it is whatever the file says, and
+// nothing downstream treats it as suspect: Conform multiplies the frame count
+// by 48000/rate, so a track declaring 1 Hz asks for a fifty-billion-frame
+// allocation and the process dies with `runtime: out of memory`, which is a
+// throw and cannot be recovered. A rate of zero is worse in its own way — the
+// ratio is +Inf, the conversion to int wraps to the minimum, and a two-second
+// track silently becomes one frame of silence with no error at all.
+//
+// The bounds are wide enough for anything real, from telephony to DSD-adjacent
+// PCM, and narrow enough that neither of those can happen.
+const (
+	MinSampleRate = 1000
+	MaxSampleRate = 768000
+)
+
+// ValidSampleRate reports whether a declared rate is one a real file could
+// have.
+func ValidSampleRate(rate int) bool {
+	return rate >= MinSampleRate && rate <= MaxSampleRate
+}
+
 // PCM is decoded audio in the engine's working format: interleaved float32
 // samples in [-1,1].
 type PCM struct {
@@ -94,7 +117,11 @@ func (p *PCM) Resample(rate int) *PCM {
 	if p == nil {
 		return nil
 	}
-	if rate <= 0 || rate == p.SampleRate || p.Channels <= 0 {
+	// A rate outside the sane range cannot be resampled to or from: the ratio
+	// is either absurd or infinite, and both end in an allocation nobody asked
+	// for. The decoders reject such files, so reaching here means a PCM was
+	// built by hand; returning it unchanged is the only harmless answer.
+	if !ValidSampleRate(rate) || !ValidSampleRate(p.SampleRate) || rate == p.SampleRate || p.Channels <= 0 {
 		return p.clone()
 	}
 

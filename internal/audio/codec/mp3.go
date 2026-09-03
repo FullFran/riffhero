@@ -31,5 +31,10 @@ func DecodeMP3(data []byte) (*PCM, error) {
 		v := int16(binary.LittleEndian.Uint16(raw[i*2:]))
 		samples[i] = float32(v) / 32768
 	}
+	// The rate comes straight out of the file's header and every conversion
+	// downstream divides by it. See ValidSampleRate.
+	if rate := dec.SampleRate(); !ValidSampleRate(rate) {
+		return nil, fmt.Errorf("sample rate %d is outside %d-%d Hz", rate, MinSampleRate, MaxSampleRate)
+	}
 	return &PCM{SampleRate: dec.SampleRate(), Channels: 2, Data: samples}, nil
 }

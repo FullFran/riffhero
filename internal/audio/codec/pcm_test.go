@@ -246,3 +246,50 @@ func assertMonotonic(t *testing.T, data []float32) {
 		}
 	}
 }
+
+func TestValidSampleRate(t *testing.T) {
+	for _, rate := range []int{0, -1, 1, 999, 768001, 1 << 30} {
+		if ValidSampleRate(rate) {
+			t.Fatalf("%d Hz should not be accepted", rate)
+		}
+	}
+	for _, rate := range []int{8000, 44100, 48000, 96000, 192000} {
+		if !ValidSampleRate(rate) {
+			t.Fatalf("%d Hz should be accepted", rate)
+		}
+	}
+}
+
+func TestConformRefusesToActOnAnAbsurdRate(t *testing.T) {
+	// A rate of 1 asks Conform to multiply the frame count by 48000. On a
+	// two-megabyte file that is a fifty-billion-frame allocation and the
+	// process dies with a runtime throw, which no recover can catch.
+	p := &PCM{SampleRate: 1, Channels: 1, Data: make([]float32, 3)}
+	got := p.Conform(48000, 2)
+
+	if got.Frames() > 8 {
+		t.Fatalf("a 3-frame input at 1 Hz produced %d frames", got.Frames())
+	}
+}
+
+func TestConformDoesNotSilentlyEmptyATrackAtRateZero(t *testing.T) {
+	// The other half: at zero the ratio is +Inf, the conversion to int wraps,
+	// and a two-second track became one frame of silence with no error.
+	p := &PCM{SampleRate: 0, Channels: 1, Data: make([]float32, 2000)}
+	if got := p.Conform(48000, 1).Frames(); got != 2000 {
+		t.Fatalf("got %d frames, want the input left alone", got)
+	}
+}
+
+func TestDecodeWAVRejectsAnImpossibleSampleRate(t *testing.T) {
+	for _, rate := range []int{0, 1, 999999999} {
+		data := buildWAV(pcmFmtBody(1, 1, rate, 16), "", nil, []byte{0, 0, 0, 0})
+		if _, err := DecodeWAV(data); err == nil {
+			t.Fatalf("%d Hz was accepted", rate)
+		}
+	}
+	// And a real rate still is.
+	if _, err := DecodeWAV(buildWAV(pcmFmtBody(1, 1, 48000, 16), "", nil, []byte{0, 0, 0, 0})); err != nil {
+		t.Fatalf("48 kHz was rejected: %v", err)
+	}
+}
