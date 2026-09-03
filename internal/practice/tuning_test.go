@@ -217,3 +217,70 @@ func TestNamedSkipsStringsTheInstrumentDoesNotHave(t *testing.T) {
 		t.Fatalf("an empty tuning named %q", got)
 	}
 }
+
+func TestFretboardPlaysAScaleAcrossTheStringsNotUpOne(t *testing.T) {
+	// Two octaves of A minor. Following the last fret rather than a hand
+	// position put every one of these on the A string, climbing from the 5th
+	// fret to the 20th, because the next note of a scale is always two frets
+	// along the same string and always four or five away on the next one.
+	// Nobody has ever played a scale that way.
+	fb := NewFretboard(StandardTuning)
+	scale := []uint8{45, 47, 48, 50, 52, 53, 55, 57, 59, 60, 62, 64, 65, 67, 69, 71, 72}
+
+	strings := map[uint8]int{}
+	var maxFret uint8
+	for i, midi := range scale {
+		str, fret, ok := fb.Place(midi)
+		if !ok {
+			t.Fatalf("note %d (MIDI %d) did not place", i, midi)
+		}
+		if got := StandardTuning.MIDI(str, fret); got != midi {
+			t.Fatalf("MIDI %d placed at string %d fret %d, which sounds %d", midi, str, fret, got)
+		}
+		strings[str]++
+		if fret > maxFret {
+			maxFret = fret
+		}
+	}
+
+	if len(strings) < 4 {
+		t.Fatalf("a two-octave scale used %d strings: %v", len(strings), strings)
+	}
+	if maxFret > 12 {
+		t.Fatalf("the scale reached fret %d; it fits in the first position", maxFret)
+	}
+}
+
+func TestFretboardShiftsOnlyWhenItMust(t *testing.T) {
+	// Inside a position the hand does not move at all, and when it does it
+	// moves once rather than following every note.
+	fb := NewFretboard(StandardTuning)
+	fb.Place(52) // E3: string 4 fret 2, anchoring the hand low
+
+	start := fb.Anchor()
+	for _, midi := range []uint8{55, 57, 59, 60} { // all reachable from there
+		fb.Place(midi)
+	}
+	if fb.Anchor() != start {
+		t.Fatalf("the hand drifted from %d to %d without needing to", start, fb.Anchor())
+	}
+
+	// A note well up the neck moves it once, and centres it on that note.
+	_, _, fret, _ := fb.PlaceOrTranspose(79)
+	if !inHand(int(fret), fb.Anchor()) {
+		t.Fatalf("fret %d is outside the new position starting at %d", fret, fb.Anchor())
+	}
+}
+
+func TestFretboardTreatsAnOpenStringAsAlwaysReachable(t *testing.T) {
+	// The hand does not move to play an open string, so one must never drag
+	// the position back down the neck.
+	fb := NewFretboard(StandardTuning)
+	fb.Place(69) // A4 up the neck
+	high := fb.Anchor()
+
+	fb.Place(64) // the open high E
+	if fb.Anchor() != high {
+		t.Fatalf("an open string moved the hand from %d to %d", high, fb.Anchor())
+	}
+}
