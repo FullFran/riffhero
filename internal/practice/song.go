@@ -66,3 +66,31 @@ func SongEnd(notes []Note) Frame {
 	}
 	return end
 }
+
+// SyntheticScore wraps the Phase 0 phrase in the full song model, so the app
+// has something real to run against with no file at all. It is the demo, the
+// smoke test and the thing to check a new guitar input against, and it must
+// stay a pure function of the clock.
+func SyntheticScore(clock Clock) *Song {
+	notes := SyntheticSong(clock)
+
+	// Twenty eighth notes is ten quarters: two and a half bars of 4/4, rounded
+	// up so the last note is inside the grid rather than hanging off the end.
+	song := &Song{
+		Title:  "Pentatonic warm-up",
+		Artist: "RiffHero",
+		Source: "built in",
+		Clock:  clock,
+		Grid: BuildGrid(clock, clock.Frames(SyntheticSongLeadInSeconds), []Section{
+			{BPM: SyntheticSongBPM, Sig: CommonTime, Bars: 3},
+		}),
+		Tracks: []Track{{
+			Name:       "Guitar",
+			Instrument: "Clean guitar",
+			Tuning:     StandardTuning,
+			Notes:      notes,
+		}},
+	}
+	song.Normalize()
+	return song
+}

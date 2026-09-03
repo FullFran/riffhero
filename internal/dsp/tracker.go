@@ -20,11 +20,22 @@ type Note struct {
 // The cost is latency, and it is a known quantity rather than a hope: see
 // LatencyMillis.
 type Tracker struct {
+	// Expect is how the score conditions detection. Given the stream position
+	// of an attack it returns the pitches the score expects there, or nothing
+	// when it expects one note or has no opinion.
+	//
+	// Two or more expected pitches switch the analysis from "what note is
+	// this?" to "are these notes present?", which is a question a spectrum can
+	// answer and unconstrained polyphonic transcription cannot. The returned
+	// slice is read immediately and never retained, so the caller may reuse it.
+	Expect func(at int64) []uint8
+
 	sampleRate int
 
 	gate  *Gate
 	onset *Onset
 	est   *Estimator
+	chord *ChordVerifier
 
 	// attackSkip is how much of the attack transient to step over before
 	// estimating. The first few milliseconds of a pluck are broadband noise
@@ -50,16 +61,31 @@ func NewTracker(sampleRate int) *Tracker {
 		gate:          NewGate(),
 		onset:         NewOnset(sampleRate),
 		est:           NewEstimator(sampleRate),
+		chord:         NewChordVerifier(sampleRate),
 		attackSkip:    int(0.012 * float64(sampleRate)),
 		confirmations: 3,
 		quorum:        2,
 	}
 }
 
-// span is how many samples after an onset the tracker needs before it can
-// decide what the note was.
+// span is how many samples after an onset the monophonic path needs before it
+// can decide what the note was.
 func (t *Tracker) span() int {
 	return t.attackSkip + t.est.WindowSize() + (t.confirmations-1)*t.onset.Hop()
+}
+
+// chordSpan is the same for the chord path, and it is much longer: telling
+// whether a given pitch is present needs frequency resolution, and frequency
+// resolution is time.
+//
+// The two are kept apart on purpose. Making every onset wait for the chord
+// window would triple the latency of the single notes that make up most of
+// practice, to pay for an analysis they never run.
+func (t *Tracker) chordSpan() int {
+	if n := t.attackSkip + t.chord.WindowSize(); n > t.span() {
+		return n
+	}
+	return t.span()
 }
 
 // LatencyMillis is the delay between a string being struck and the note being
@@ -110,15 +136,71 @@ func (t *Tracker) resolve() []Note {
 
 	kept := t.pending[:0]
 	for _, at := range t.pending {
-		if at+int64(t.span()) > available {
+		var expected []uint8
+		if t.Expect != nil {
+			expected = t.Expect(at)
+		}
+
+		need := t.span()
+		if len(expected) >= 2 {
+			need = t.chordSpan()
+		}
+		if at+int64(need) > available {
 			kept = append(kept, at) // not enough audio yet
 			continue
+		}
+
+		if len(expected) >= 2 {
+			if notes := t.analyseChord(at, expected); len(notes) > 0 {
+				out = append(out, notes...)
+				continue
+			}
+			// Nothing of the expected chord is there. The player may have hit
+			// one string of it, so fall through rather than emitting silence:
+			// a single wrong note is information, and the score can use it.
 		}
 		if note, ok := t.analyse(at); ok {
 			out = append(out, note)
 		}
 	}
 	t.pending = kept
+	return out
+}
+
+// analyseChord tests the expected pitches against the spectrum just after the
+// attack and emits one note per pitch it finds.
+//
+// Emitting a separate note per pitch rather than one chord event is what keeps
+// the domain simple: the scoring session already resolves notes one at a time,
+// so a strummed chord scores as the notes it is made of and nothing above the
+// DSP has to learn what a chord is.
+func (t *Tracker) analyseChord(at int64, expected []uint8) []Note {
+	start := at + int64(t.attackSkip) - t.historyStart
+	window := t.chord.WindowSize()
+	if start < 0 || start+int64(window) > int64(len(t.history)) {
+		return nil
+	}
+
+	res := t.chord.Verify(t.history[start:start+int64(window)], expected)
+	if !res.Voiced || res.Found == 0 {
+		return nil
+	}
+
+	out := make([]Note, 0, res.Found)
+	for _, e := range res.Notes {
+		if !e.Present {
+			continue
+		}
+		out = append(out, Note{
+			At:    at,
+			MIDI:  e.MIDI,
+			Cents: e.Cents,
+			// The whole event's score matters as much as the single pitch:
+			// finding an E while the rest of the chord is missing is weaker
+			// evidence than finding the same E inside a clean strum.
+			Confidence: e.Score * res.Score,
+		})
+	}
 	return out
 }
 
@@ -219,7 +301,9 @@ func (t *Tracker) decide(at int64, votes []windowVote) (Note, bool) {
 // trim drops history that no pending onset can still need, so a long session
 // does not grow the buffer without bound.
 func (t *Tracker) trim() {
-	keepFrom := t.historyStart + int64(len(t.history)) - int64(t.span()+t.onset.Hop())
+	// Sized on the chord path: it is the longer of the two, and history thrown
+	// away early is a chord that can never be verified.
+	keepFrom := t.historyStart + int64(len(t.history)) - int64(t.chordSpan()+t.onset.Hop())
 	for _, at := range t.pending {
 		if at < keepFrom {
 			keepFrom = at
