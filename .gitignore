@@ -1,0 +1,12 @@
+/riffhero
+/bin/
+/dist/
+*.wav
+*.flac
+*.mp3
+*.gp
+*.gpif
+*.mxl
+*.musicxml
+*.mid
+.DS_Store
