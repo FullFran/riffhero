@@ -1,12 +1,12 @@
 name: ci
 
-# Every pull request and every push to main runs what `make ci` runs locally.
+# Every pull request and every push to main runs the full check matrix below.
 #
 # The one thing that cannot be run the same way here is anything in
 # cmd/riffhero: Ebitengine opens its window driver in a package init, so the
 # whole package - tests included - panics the moment it is loaded without a
 # display. That is not a test that touches the UI, it is the import itself.
-# Hence xvfb, and hence the split between `test` and `test-app` below.
+# Hence xvfb, and hence the split between the `check` and `app` jobs below.
 
 on:
   pull_request:

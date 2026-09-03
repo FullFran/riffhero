@@ -55,18 +55,37 @@ smoke: build ## Run the whole practice loop with no window and no device
 # Publishing happens in GitHub Actions when a vX.Y.Z tag is pushed. These two
 # exist so you can prove the release will work before creating that tag.
 
-VERSION := $(shell ./$(BIN) --version 2>/dev/null | awk '{print $$2}')
-
 dist: build ## Build and package the release archive the way CI does
-	@rm -rf dist && mkdir -p dist
-	@cp $(BIN) README.md dist/
-	@[ -f LICENSE ] && cp LICENSE dist/ || true
-	@tar -C dist -czf "riffhero_v$(VERSION)_linux_amd64.tar.gz" .
-	@sha256sum riffhero_v$(VERSION)_linux_amd64.tar.gz
-	@echo "not published; that only happens from a pushed tag"
+	@set -eu; \
+	if [ -n "$${DISPLAY:-}" ]; then \
+		if ! version_output=$$($(GL) ./$(BIN) --version); then \
+			echo "error: failed to read the version from $(BIN) using DISPLAY=$$DISPLAY" >&2; \
+			exit 1; \
+		fi; \
+	elif command -v xvfb-run >/dev/null 2>&1; then \
+		if ! version_output=$$(xvfb-run -a $(GL) ./$(BIN) --version); then \
+			echo "error: failed to read the version from $(BIN) using xvfb-run" >&2; \
+			exit 1; \
+		fi; \
+	else \
+		echo "error: cannot read the version: Ebitengine needs a display; set DISPLAY or install xvfb-run" >&2; \
+		exit 1; \
+	fi; \
+	version=$$(printf '%s\n' "$$version_output" | awk 'NR == 1 && $$1 == "riffhero" { print $$2 }'); \
+	if ! printf '%s\n' "$$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$'; then \
+		echo "error: riffhero --version did not return a valid semantic version: $$version_output" >&2; \
+		exit 1; \
+	fi; \
+	archive="riffhero_v$${version}_linux_amd64.tar.gz"; \
+	rm -rf dist && mkdir -p dist; \
+	cp $(BIN) README.md dist/; \
+	[ -f LICENSE ] && cp LICENSE dist/ || true; \
+	tar -C dist -czf "$$archive" .; \
+	sha256sum "$$archive"; \
+	echo "not published; that only happens from a pushed tag"
 
-version-check: ## Check a tag against the source version (make version-check TAG=v1.0.0)
-	@if [ -z "$(TAG)" ]; then echo "usage: make version-check TAG=v1.0.0"; exit 2; fi
+version-check: ## Check a tag against the source version (make version-check TAG=v0.1.0)
+	@if [ -z "$(TAG)" ]; then echo "usage: make version-check TAG=v0.1.0"; exit 2; fi
 	@RIFFHERO_RELEASE_TAG=$(TAG) go test -run TestVersionMatchesTheReleaseTag ./internal/buildinfo/
 
 tidy: ## Tidy the module
