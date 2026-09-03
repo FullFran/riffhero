@@ -84,6 +84,9 @@ jobs:
           CGO_ENABLED: 1
         run: go build -o bin/riffhero ./cmd/riffhero
 
+      - name: Version
+        run: xvfb-run -a ./bin/riffhero --version
+
       # Both languages, because a translation that drops a printf verb prints
       # "%!d(MISSING)" and nothing else would notice.
       - name: Dry run
@@ -120,3 +123,7 @@ jobs:
           CGO_ENABLED: 1
           CC: x86_64-w64-mingw32-gcc
         run: go build -o riffhero.exe ./cmd/riffhero
+
+      - name: Version
+        shell: bash
+        run: ./riffhero.exe --version
