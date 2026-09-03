@@ -46,21 +46,20 @@ func (a *app) drawPractice(screen *ebiten.Image) {
 
 	a.tab = a.layout
 	staffOn := a.showsStaff()
-	var staff ui.StaffLayout
 	switch {
 	case staffOn && a.showsTab():
 		mid := top + (bottom-top)*0.52
-		staff = staffFor(top, mid)
+		a.staff = staffFor(top, mid)
 		a.tab = a.layout.WithBand(mid+10, bottom)
 	case staffOn:
-		staff = staffFor(top, bottom)
+		a.staff = staffFor(top, bottom)
 	}
 
 	a.drawLoopRegion(screen, now)
 	if staffOn {
-		a.drawStaffLines(screen, staff)
-		a.drawStaffGrid(screen, staff, now)
-		a.drawStaffNotes(screen, staff, now)
+		a.drawStaffLines(screen, a.staff)
+		a.drawStaffGrid(screen, a.staff, now)
+		a.drawStaffNotes(screen, a.staff, now)
 	}
 	if a.showsTab() {
 		a.drawGrid(screen, now)
@@ -209,17 +208,36 @@ func (a *app) drawHUD(screen *ebiten.Image) {
 	}
 }
 
-// readingBand is the vertical span the playhead and the loop shading cover:
-// everything on show, whether that is one reading or two.
+// readingBand is the vertical span the playhead and the loop shading cover.
+//
+// It is what is actually on show, not the space that was available. Shading a
+// whole empty window green because one staff is being drawn in the middle of
+// it tells the player nothing about where the region is.
 func (a *app) readingBand() (top, bottom float32) {
-	t, b := a.layout.Band()
+	t, b := 0.0, 0.0
+	set := false
+	stretch := func(lo, hi float64) {
+		if !set {
+			t, b, set = lo, hi, true
+			return
+		}
+		if lo < t {
+			t = lo
+		}
+		if hi > b {
+			b = hi
+		}
+	}
+
+	if a.showsStaff() {
+		stretch(a.staff.LineY(0)-a.staff.LineGap*3, a.staff.LineY(4)+a.staff.LineGap*3)
+	}
 	if a.showsTab() {
-		if y := a.tab.StringY(6) + 30; y > b {
-			b = y
-		}
-		if y := a.tab.StringY(1) - 30; y < t {
-			t = y
-		}
+		stretch(a.tab.StringY(1)-26, a.tab.StringY(6)+26)
+	}
+	if !set {
+		lo, hi := a.layout.Band()
+		return float32(lo), float32(hi)
 	}
 	return float32(t), float32(b)
 }
