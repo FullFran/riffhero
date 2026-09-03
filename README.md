@@ -46,6 +46,12 @@ accuracy 93%    combo x24    speed 0.75x    loop bars 9-12
   struggle and it comes down.
 - **Latency calibration** by click train, so a player who is dead on time is
   not told they are consistently late.
+- **Standard notation** as well as tablature, or both at once. Written in
+  treble clef sounding an octave down, the way guitar music is; the two
+  readings scroll on one timeline, so a note is at the same place in each.
+- **An interface**: a title screen, a file browser, a settings screen that
+  reaches every setting there is, a device picker with a meter per input, and
+  calibration without leaving the app.
 
 ## Getting started
 
@@ -53,11 +59,28 @@ accuracy 93%    combo x24    speed 0.75x    loop bars 9-12
 make deps           # prints the system packages to install
 sudo apt install …  # what it printed
 make build
-
-./bin/riffhero --list-devices     # find your interface
-./bin/riffhero --calibrate        # measure the round trip, once
-./bin/riffhero song.gp --backing song.flac
+make run
 ```
+
+That opens the app on its title screen, and everything else is reachable from
+there: choose a song, choose a backing track, pick your interface, measure the
+latency, switch between tablature and notation. Nothing has to be set on the
+command line — the flags exist, and are listed below, but they are set before
+the guitar is plugged in and the interesting questions only become answerable
+afterwards.
+
+### With an audio interface
+
+1. Plug it in, then **SETTINGS → INPUT DEVICE**. If you opened the app first,
+   **REFRESH** finds it.
+2. On that screen each socket has its own meter. Play, watch which bar moves,
+   and press **C** until "listening to" names it. A two-input box puts the
+   guitar in one socket and leaves the other open; averaging the pair would
+   halve the guitar and add the empty socket's hum.
+3. **SETTINGS → MEASURE LATENCY**, or **5** from the title. Patch the output
+   back into the input if you can — that measurement is worth 87% confidence
+   against about 45% through a microphone.
+4. Play.
 
 No score runs the built-in phrase. No backing track keeps the timeline on the
 same clock and plays silence. `--no-audio` replays a scripted performance, so
@@ -85,8 +108,12 @@ accuracy 75%  best combo x2  4 of 16 resolved
 
 ## Controls
 
+Every button in the menus has its key printed on it, and the mouse works
+everywhere the keyboard does. While playing:
+
 | Key | |
 | --- | --- |
+| `ESC` | back to the menu |
 | `SPACE` | play / pause |
 | `R` | restart and clear the scoreboard |
 | `←` `→` | seek a bar back / forward |
@@ -98,8 +125,9 @@ accuracy 75%  best combo x2  4 of 16 resolved
 | `-` `=` | backing track quieter / louder |
 | `M` | guitar monitoring level |
 | `TAB` | next track |
+| `N` | tablature / notation / both |
+| `S` | settings |
 | `H` | help |
-| `ESC` | quit |
 
 ## Options
 

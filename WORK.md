@@ -27,9 +27,23 @@ internal/audio/codec  wav (by hand), mp3, flac, plus rate and channel
 internal/stretch    WSOLA, pure Go.
 internal/score      gp / musicxml / midi importers behind one front door.
 internal/config     ~/.config/riffhero/config.json.
-internal/ui         tab geometry and the HUD, both headless.
-cmd/riffhero        flags, wiring, the Ebitengine view.
+internal/library    what is on disk that could be opened, for the picker.
+internal/ui         tab and staff geometry and the HUD, all headless.
+cmd/riffhero        flags, wiring, the screens, and the Ebitengine view.
 ```
+
+### The screens
+
+`cmd/riffhero` follows the shape of `inflation-rpg-go`: a `mode`, an
+`openX`/`updateX`/`drawX` per screen, and widgets as **values** rather than
+objects with state — where a button is and what it says are worked out afresh
+every frame from the app, so one can never show something the app no longer
+holds. Every button carries the key that presses it, because RiffHero is used
+with a guitar in both hands.
+
+The rows of a screen are a data table (`titleRows`, `settingRows`), which is
+what keeps the update and the draw agreeing about what is on screen and where.
+Add a setting by adding a row.
 
 ## What is worth knowing before changing anything
 
@@ -109,6 +123,19 @@ Timing, from an adversarial review of the finished app:
 - the tablature and the pitch of a note must agree. Two importers could produce
   one that disagreed, and the player can satisfy neither.
 
+The interface, found by walking the screens rather than reading the code:
+
+- a line of explanation drawn *between* two buttons is painted over by the
+  second one. Draw all the buttons, then all the notes;
+- a fixed row pitch runs off the bottom of a half-screen window, and the rows
+  that fall off are the ones nobody then knows exist. The settings screen
+  divides whatever room it has, and drops the explanations before it drops a
+  row;
+- a thick line with square caps is a rectangle. A note head is a circle;
+- the desktop's folder names are localised. Guessing "Music" finds nothing on a
+  Spanish desktop, where it is Música — the real names are in
+  `~/.config/user-dirs.dirs`.
+
 Audio, all found by opening real devices:
 
 - JACK refuses a one-channel capture request. Its ports are the system's, and a
@@ -132,7 +159,15 @@ Audio, all found by opening real devices:
 - the loop crossfade divides by its own length, not by the nominal one. A
   region whose length is not a multiple of the render chunk leaves a short
   final chunk, and the ramp then opens partway down — a step, which is the
-  click the fade exists to remove.
+  click the fade exists to remove;
+- the audio **host** is opened once for the life of the process and the
+  **device** as often as you like. That asymmetry is the miniaudio bug above,
+  and it is what makes a device picker possible at all: closing a device and
+  opening another works, and goes on working after one that would not open;
+- averaging a multi-input capture is right for a microphone and wrong for a
+  guitar in socket one — half the level, plus the empty socket's hum. Nothing
+  in the audio distinguishes the two cases, so the channel is a setting and the
+  device screen meters each input so the answer is visible.
 
 Domain:
 
@@ -201,10 +236,12 @@ most improve the practice loop:
 2. **Articulations.** Guitar Pro carries bends, slides, hammer-ons and vibrato;
    the importer drops them and a bend currently scores as an out-of-tune note.
    Scoring them means matching a pitch contour rather than a semitone.
-3. **A song picker in the app.** Everything is command-line today.
-4. **Da Capo and Dal Segno**, which are detected but not followed.
-5. **Seven- and eight-string tracks**, which are skipped because
+3. **Da Capo and Dal Segno**, which are detected but not followed.
+4. **Seven- and eight-string tracks**, which are skipped because
    `practice.Tuning` is a fixed six-element array.
+5. **A key signature.** The staff spells the black notes as sharps or as flats
+   by a setting, because nothing in the score model carries a key. An importer
+   that read one would let the notation be spelled properly.
 
 ## Design constraints
 
