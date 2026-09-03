@@ -81,6 +81,7 @@ type app struct {
 	calib    calibState
 	notation config.Notation
 	spelling ui.Spelling
+	channel  audio.InputChannel
 }
 
 func build(o options, cfg config.Config) (*app, error) {
@@ -125,6 +126,7 @@ func build(o options, cfg config.Config) (*app, error) {
 		a.notation = config.NotationTab
 	}
 	a.spelling = spellingFor(cfg.Spelling)
+	a.channel = channelFor(cfg.InputChannel)
 
 	// A missing or busy sound card is not a reason to refuse to start. The
 	// scripted path still shows the score, the transport and the scoring, and
@@ -332,6 +334,17 @@ func (a *app) startAudio() error {
 	a.backing = backing
 
 	return a.openStream()
+}
+
+func channelFor(name string) audio.InputChannel {
+	switch name {
+	case "left":
+		return audio.ChannelLeft
+	case "right":
+		return audio.ChannelRight
+	default:
+		return audio.ChannelMix
+	}
 }
 
 func spellingFor(name string) ui.Spelling {

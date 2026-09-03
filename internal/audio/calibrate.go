@@ -284,7 +284,10 @@ func Calibrate(host *Host, opts CalibrationOptions) (Calibration, error) {
 
 			if inCh > 0 {
 				in := asFloat32(inBytes, n*inCh)
-				downmix(mono[:size], in[off*inCh:(off+size)*inCh], inCh)
+				// The measurement averages every input: the clicks come back on
+				// whichever socket is connected, and which one that is is
+				// exactly what is not known yet.
+				pick(mono[:size], in[off*inCh:(off+size)*inCh], inCh, ChannelMix)
 				if at := int(inPos.Load()); at < len(recorded) {
 					inPos.Store(int64(at + copy(recorded[at:], mono[:size])))
 				}

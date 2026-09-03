@@ -81,6 +81,7 @@ func (a *app) openStream() error {
 		Capture:    true,
 		Playback:   a.output != nil,
 		Backing:    a.backing,
+		Channel:    a.channel,
 		Volume:     a.volumeSetting(),
 		Monitor:    a.monitorSetting(),
 	}, player, det)
