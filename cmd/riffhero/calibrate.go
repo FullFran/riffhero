@@ -32,6 +32,10 @@ type calibState struct {
 }
 
 func (a *app) openCalibration() {
+	// Whatever was playing has to stop. The measurement takes the device away
+	// and gives it back, and a transport left running would advance across the
+	// gap against audio nobody heard.
+	a.head.Pause()
 	a.calib = calibState{}
 	a.mode = inCalibration
 }

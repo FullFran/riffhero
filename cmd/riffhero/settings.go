@@ -19,7 +19,7 @@ import (
 
 type settingsState struct {
 	kind   audio.Kind // which list the device picker is showing
-	cursor int
+	scroll int        // first visible row, for a window too small for them all
 }
 
 type settingKind uint8
@@ -186,10 +186,12 @@ var settingRows = []settingRow{
 func (a *app) openSettings() { a.mode = inSettings }
 
 const (
-	settingsTop     = 112.0
-	settingsBottom  = 74.0 // room for the back button
-	settingRowMax   = 58.0 // a row and the line explaining it underneath
-	settingRowMin   = 30.0
+	settingsTop    = 112.0
+	settingsBottom = 74.0 // room for the back button
+	settingRowMax  = 58.0 // a row and the line explaining it underneath
+	// Never below the row's own height plus a gap, or the rows would overlap.
+	// Below that the list scrolls instead of squeezing.
+	settingRowMin   = settingRowH + 6
 	settingNoteRoom = 16.0 // the pitch at which the explanations still fit
 )
 
@@ -212,12 +214,53 @@ func (a *app) settingPitch() float64 {
 }
 
 func (a *app) settingNotesFit() bool {
-	return a.settingPitch() >= settingRowH+settingNoteRoom
+	return a.settingPitch() >= settingRowH+settingNoteRoom && a.settingCapacity() >= len(settingRows)
+}
+
+// settingCapacity is how many rows fit at the pitch chosen. Dragging the
+// window very small is the case where they do not all fit, and hiding the last
+// few is worse than scrolling: a setting nobody can reach is a setting that
+// does not exist.
+func (a *app) settingCapacity() int {
+	n := int((float64(a.height) - settingsTop - settingsBottom) / a.settingPitch())
+	if n < 1 {
+		n = 1
+	}
+	if n > len(settingRows) {
+		n = len(settingRows)
+	}
+	return n
+}
+
+// settingVisible reports whether a row is on screen, and where.
+func (a *app) settingVisible(i int) bool {
+	return i >= a.settings.scroll && i < a.settings.scroll+a.settingCapacity()
 }
 
 func (a *app) settingGeometry(i int) (x, y, w float64) {
 	x, w = 40, float64(a.width)-80
-	return x, settingsTop + float64(i)*a.settingPitch(), w
+	return x, settingsTop + float64(i-a.settings.scroll)*a.settingPitch(), w
+}
+
+// scrollSettings keeps the list inside its bounds and, when a row is reached
+// by its key rather than by the mouse, brings it into view.
+func (a *app) scrollSettings(by int) {
+	a.settings.scroll += by
+	if max := len(settingRows) - a.settingCapacity(); a.settings.scroll > max {
+		a.settings.scroll = max
+	}
+	if a.settings.scroll < 0 {
+		a.settings.scroll = 0
+	}
+}
+
+func (a *app) revealSetting(i int) {
+	switch {
+	case i < a.settings.scroll:
+		a.settings.scroll = i
+	case i >= a.settings.scroll+a.settingCapacity():
+		a.settings.scroll = i - a.settingCapacity() + 1
+	}
 }
 
 func (a *app) settingButtons() []button {
@@ -243,14 +286,27 @@ func (a *app) updateSettings() {
 		return
 	}
 
+	if _, wheel := ebiten.Wheel(); wheel != 0 {
+		a.scrollSettings(-int(wheel) * 2)
+	}
+	switch {
+	case inpututil.IsKeyJustPressed(ebiten.KeyPageDown), inpututil.IsKeyJustPressed(ebiten.KeyArrowDown):
+		a.scrollSettings(1)
+	case inpututil.IsKeyJustPressed(ebiten.KeyPageUp), inpututil.IsKeyJustPressed(ebiten.KeyArrowUp):
+		a.scrollSettings(-1)
+	}
+	a.scrollSettings(0)
+
 	buttons := a.settingButtons()
 	for i, r := range settingRows {
 		if buttons[i].off {
 			continue
 		}
-		hit := buttons[i].clicked()
-		if r.key != "" && keyNamed(r.key) != ebiten.KeyMax && inpututil.IsKeyJustPressed(keyNamed(r.key)) {
-			hit = true
+		byKey := r.key != "" && keyNamed(r.key) != ebiten.KeyMax && inpututil.IsKeyJustPressed(keyNamed(r.key))
+		hit := byKey || (a.settingVisible(i) && buttons[i].clicked())
+		if byKey {
+			// A row reached by its key may be scrolled off; show what changed.
+			a.revealSetting(i)
 		}
 
 		switch r.kind {
@@ -263,10 +319,10 @@ func (a *app) updateSettings() {
 			if r.atMax != nil {
 				s.atMax = r.atMax(a)
 			}
-			if s.minus().clicked() && r.less != nil {
+			if a.settingVisible(i) && s.minus().clicked() && r.less != nil {
 				r.less(a)
 			}
-			if s.plus().clicked() && r.more != nil {
+			if a.settingVisible(i) && s.plus().clicked() && r.more != nil {
 				r.more(a)
 			}
 			// The keyboard shortcut steps up; with shift it steps down, so one
@@ -292,6 +348,9 @@ func (a *app) drawSettings(screen *ebiten.Image) {
 	drawDim(screen, "click, or press the key on the left; SHIFT steps a value down", 40, 78)
 
 	for i, r := range settingRows {
+		if !a.settingVisible(i) {
+			continue
+		}
 		x, y, w := a.settingGeometry(i)
 		h := settingRowH
 		disabled := r.off != nil && r.off(a)
@@ -326,13 +385,11 @@ func (a *app) drawSettings(screen *ebiten.Image) {
 	// line belonging to the one above it — and only when there is room.
 	if !a.settingNotesFit() {
 		a.backButton().draw(screen)
-		if a.noticeTicks > 0 {
-			drawTinted(screen, a.notice, 240, a.height-50, menuAccent)
-		}
+		a.drawSettingsFooter(screen)
 		return
 	}
 	for i, r := range settingRows {
-		if r.note == nil || (r.off != nil && r.off(a)) {
+		if r.note == nil || !a.settingVisible(i) || (r.off != nil && r.off(a)) {
 			continue
 		}
 		x, y, _ := a.settingGeometry(i)
@@ -342,8 +399,16 @@ func (a *app) drawSettings(screen *ebiten.Image) {
 	}
 
 	a.backButton().draw(screen)
+	a.drawSettingsFooter(screen)
+}
+
+func (a *app) drawSettingsFooter(screen *ebiten.Image) {
+	if n := a.settingCapacity(); n < len(settingRows) {
+		drawDim(screen, fmt.Sprintf("%d-%d of %d    scroll for the rest",
+			a.settings.scroll+1, a.settings.scroll+n, len(settingRows)), 240, a.height-56)
+	}
 	if a.noticeTicks > 0 {
-		drawTinted(screen, a.notice, 240, a.height-50, menuAccent)
+		drawTinted(screen, a.notice, 240, a.height-38, menuAccent)
 	}
 }
 
