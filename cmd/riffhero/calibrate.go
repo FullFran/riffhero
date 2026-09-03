@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
 	"github.com/FullFran/riffhero/internal/audio"
+	"github.com/FullFran/riffhero/internal/i18n"
 )
 
 // Measuring the round trip, from inside the app.
@@ -50,11 +52,11 @@ func (a *app) calibrationButtons() []button {
 		return nil
 	case a.calib.done && a.calib.err == "":
 		return []button{
-			{x: x - w/2 - 8, y: y, w: w, h: h, label: "USE IT", key: "ENTER"},
-			{x: x + w/2 + 8, y: y, w: w, h: h, label: "DISCARD", key: "ESC"},
+			{x: x - w/2 - 8, y: y, w: w, h: h, label: i18n.T("USE IT"), key: "ENTER"},
+			{x: x + w/2 + 8, y: y, w: w, h: h, label: i18n.T("DISCARD"), key: "ESC"},
 		}
 	default:
-		return []button{{x: x, y: y, w: w, h: h, label: "START", key: "ENTER"}}
+		return []button{{x: x, y: y, w: w, h: h, label: i18n.T("START"), key: "ENTER"}}
 	}
 }
 
@@ -100,7 +102,7 @@ func (a *app) updateCalibration() {
 // the very clicks the measurement is listening for.
 func (a *app) startCalibration() {
 	if a.host == nil {
-		a.calib.done, a.calib.err = true, "no audio backend"
+		a.calib.done, a.calib.err = true, i18n.T("no audio backend")
 		return
 	}
 	a.closeStream()
@@ -127,14 +129,37 @@ func (a *app) finishCalibration(out calibOutcome) {
 	a.calib.done = true
 	a.calib.result = out.result
 	if out.err != nil {
-		a.calib.err = out.err.Error()
+		a.calib.err = calibrationMessage(out.err)
 	}
 
 	// The stream comes back either way: a failed measurement must not leave
 	// somebody with no sound card.
 	if err := a.openStream(); err != nil {
-		a.warnings = append(a.warnings, "could not reopen the device after calibrating: "+err.Error())
+		a.warnings = append(a.warnings, i18n.Tf("could not reopen the device after calibrating: %s", err))
 	}
+}
+
+// calibrationMessage says why a measurement was refused, in the player's
+// language.
+//
+// The reason travels from the measurement as a value rather than only as a
+// sentence, which is what makes this possible: each case is a whole line
+// written here, not an English error string picked apart. Anything that is not
+// a refusal — a device that would not open, say — keeps its own words.
+func calibrationMessage(err error) string {
+	var refused *audio.CalibrationError
+	if !errors.As(err, &refused) {
+		return err.Error()
+	}
+	switch refused.Reason {
+	case audio.HeardNothing:
+		return i18n.Tf(audio.HeardNothingText, refused.PeakDB)
+	case audio.NotRecording:
+		return i18n.Tf(audio.NotRecordingText, refused.Captured, refused.Wanted)
+	case audio.ClicksNotFound:
+		return i18n.Tf(audio.ClicksNotFoundText, refused.Confidence*100, refused.PeakDB)
+	}
+	return err.Error()
 }
 
 // waitForCalibration blocks until a measurement in flight has finished with
@@ -165,32 +190,40 @@ func (a *app) acceptCalibration() {
 		a.det.LatencyOffset = a.cfg.Latency(a.opts.sampleRate)
 	}
 	a.calibrated = true
-	a.showNotice(fmt.Sprintf("latency %.1f ms", r.Millis))
+	a.showNotice(i18n.Tf("latency %.1f ms", r.Millis))
 	a.openSettings()
 }
 
-var calibrationHelp = []string{
-	"RiffHero plays a train of clicks and listens for them coming back.",
-	"The gap is the round trip: your output buffer, the converter, the cable",
-	"or the air, and the input buffer.",
-	"",
-	"The clean way is a loop: run a cable from the headphone or line output",
-	"back into an input, or pick your card's own monitor as the input.",
-	"Played out loud into a microphone it also works, less precisely, and",
-	"includes the speaker and the room along with the buffers.",
-	"",
-	"It takes about five seconds. Keep the room quiet.",
+// calibrationHelp is worked out at draw time, not at init: a package-level var
+// would be built once, before the language is known, and stay in English for
+// the rest of the run.
+func calibrationHelp() []string {
+	return []string{
+		i18n.T("RiffHero plays a train of clicks and listens for them coming back. The gap is the round trip: your output buffer, the converter, the cable or the air, and the input buffer."),
+		"",
+		i18n.T("The clean way is a loop: run a cable from the headphone or line output back into an input, or pick your card's own monitor as the input. Played out loud into a microphone it also works, less precisely, and includes the speaker and the room along with the buffers."),
+		"",
+		i18n.T("It takes about five seconds. Keep the room quiet."),
+	}
 }
 
 func (a *app) drawCalibration(screen *ebiten.Image) {
 	screen.Fill(menuFace)
-	drawHeading(screen, "MEASURE LATENCY", 40, 34)
+	drawHeading(screen, i18n.T("MEASURE LATENCY"), 40, 34)
 
-	for i, line := range calibrationHelp {
+	var help []string
+	for _, paragraph := range calibrationHelp() {
+		if paragraph == "" {
+			help = append(help, "")
+			continue
+		}
+		help = append(help, wrapText(paragraph, (a.width-80)/glyphW)...)
+	}
+	for i, line := range help {
 		drawDim(screen, line, 40, 92+i*lineH)
 	}
 
-	y := 92 + len(calibrationHelp)*lineH + 24
+	y := 92 + len(help)*lineH + 24
 	drawDim(screen, fmt.Sprintf("out: %s", deviceOrDefault(a.output)), 40, y)
 	drawDim(screen, fmt.Sprintf("in:  %s", deviceOrDefault(a.input)), 40, y+lineH)
 
@@ -198,7 +231,7 @@ func (a *app) drawCalibration(screen *ebiten.Image) {
 	case a.calib.running:
 		a.drawCalibrationProgress(screen, y+56)
 	case a.calib.done && a.calib.err != "":
-		drawTinted(screen, "could not measure it", 40, y+56, menuBad)
+		drawTinted(screen, i18n.T("could not measure it"), 40, y+56, menuBad)
 		for i, line := range wrapText(a.calib.err, (a.width-80)/glyphW) {
 			drawDim(screen, line, 40, y+56+(i+1)*lineH)
 		}
@@ -215,7 +248,7 @@ func (a *app) drawCalibration(screen *ebiten.Image) {
 }
 
 func (a *app) drawCalibrationProgress(screen *ebiten.Image, y int) {
-	writeAt(screen, "listening...", 40, y)
+	writeAt(screen, i18n.T("listening..."), 40, y)
 	// The measurement takes about five seconds; the bar is honest about that
 	// rather than pretending to know how far along it is.
 	const expected = 60 * 6
@@ -226,10 +259,10 @@ func (a *app) drawCalibrationProgress(screen *ebiten.Image, y int) {
 func (a *app) drawCalibrationResult(screen *ebiten.Image, y int) {
 	r := a.calib.result
 	drawScaled(screen, fmt.Sprintf("%.1f ms", r.Millis), 40, y, 2, menuGood)
-	drawDim(screen, fmt.Sprintf("%d frames at %d Hz", r.Frames, r.SampleRate), 40, y+40)
-	drawDim(screen, fmt.Sprintf("confidence %.0f%%, peak %.0f dBFS", r.Confidence*100, r.PeakDB), 40, y+40+lineH)
+	drawDim(screen, i18n.Tf("%d frames at %d Hz", r.Frames, r.SampleRate), 40, y+40)
+	drawDim(screen, i18n.Tf("confidence %.0f%%, peak %.0f dBFS", r.Confidence*100, r.PeakDB), 40, y+40+lineH)
 
 	if r.Confidence < 0.6 {
-		drawTinted(screen, "low confidence: try a loopback, or turn the output up", 40, y+40+2*lineH, menuAccent)
+		drawTinted(screen, i18n.T("low confidence: try a loopback, or turn the output up"), 40, y+40+2*lineH, menuAccent)
 	}
 }

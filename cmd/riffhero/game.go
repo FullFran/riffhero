@@ -1,12 +1,11 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
 	"github.com/FullFran/riffhero/internal/config"
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
 	"github.com/FullFran/riffhero/internal/ui"
 )
@@ -56,8 +55,8 @@ func (a *app) Update() error {
 		a.lastNote, a.hasNote = update.Fed[n-1].Detected, true
 	}
 	if update.LapDone && a.runner.Adaptive() && update.Adjustment != practice.Repeat {
-		a.showNotice(fmt.Sprintf("lap %.0f%%: %s, now %s",
-			update.LapStats.Accuracy*100, update.Adjustment, ui.SpeedLabel(update.Speed)))
+		a.showNotice(i18n.Tf("lap %.0f%%: %s, now %s",
+			update.LapStats.Accuracy*100, adjustmentWord(update.Adjustment), ui.SpeedLabel(update.Speed)))
 	}
 	if a.noticeTicks > 0 {
 		a.noticeTicks--
@@ -123,7 +122,11 @@ func (a *app) updatePractice() {
 	if inpututil.IsKeyJustPressed(ebiten.KeyP) {
 		a.runner.SetAdaptive(!a.runner.Adaptive())
 		a.cfg.Progressive = a.runner.Adaptive()
-		a.showNotice("progressive practice " + onOff(a.runner.Adaptive()))
+		if a.runner.Adaptive() {
+			a.showNotice(i18n.T("progressive practice on"))
+		} else {
+			a.showNotice(i18n.T("progressive practice off"))
+		}
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyN) {
 		a.setNotation(a.notation.Next())
@@ -185,56 +188,79 @@ func (a *app) handleLoop() {
 			a.loop.B = 0
 			a.loop.Enabled = false
 		}
-		a.applyLoop("loop start")
+		a.applyLoop(loopNotice{
+			bars:  "loop start: bars %d to %d",
+			times: "loop start: %s to %s",
+			off:   "loop start: off",
+		})
 	case inpututil.IsKeyJustPressed(ebiten.KeyB):
 		a.loop.B = a.song.Grid.Snap(a.head.Position())
 		if a.loop.B > a.loop.A {
 			a.loop.Enabled = true
 		}
-		a.applyLoop("loop end")
+		a.applyLoop(loopNotice{
+			bars:  "loop end: bars %d to %d",
+			times: "loop end: %s to %s",
+			off:   "loop end: off",
+		})
 	case inpututil.IsKeyJustPressed(ebiten.KeyL):
 		a.loop.Enabled = !a.loop.Enabled && a.loop.B > a.loop.A
-		a.applyLoop("loop")
+		a.applyLoop(loopNotice{
+			bars:  "loop: bars %d to %d",
+			times: "loop: %s to %s",
+			off:   "loop: off",
+		})
 	case inpututil.IsKeyJustPressed(ebiten.KeyX):
 		a.loop = practice.Loop{}
-		a.applyLoop("loop cleared")
+		a.runner.SetLoop(a.loop)
+		a.showNotice(i18n.T("loop cleared"))
 	}
 }
 
-func (a *app) applyLoop(what string) {
+// loopNotice is one loop change said three ways: snapped to bars, timed when
+// there is no grid to snap to, and off.
+//
+// Each is a whole sentence rather than a name glued onto a frame, because the
+// name and the frame do not stay in that order in every language, and half a
+// sentence is not something a translator can be handed.
+type loopNotice struct {
+	bars, times, off string
+}
+
+func (a *app) applyLoop(say loopNotice) {
 	a.runner.SetLoop(a.loop)
 	if a.loop.Active() {
 		from, to := a.song.Grid.BarAt(a.loop.A), a.song.Grid.BarAt(a.loop.B-1)
 		if from >= 0 && to >= 0 {
-			a.showNotice(fmt.Sprintf("%s: bars %d to %d", what, a.song.Grid[from].Number, a.song.Grid[to].Number))
+			a.showNotice(i18n.Tf(say.bars, a.song.Grid[from].Number, a.song.Grid[to].Number))
 			return
 		}
-		a.showNotice(fmt.Sprintf("%s: %s to %s", what,
+		a.showNotice(i18n.Tf(say.times,
 			ui.Timecode(a.clock, a.loop.A), ui.Timecode(a.clock, a.loop.B)))
 		return
 	}
-	a.showNotice(what + ": off")
+	a.showNotice(i18n.T(say.off))
 }
 
 func (a *app) handleMix() {
 	if inpututil.IsKeyJustPressed(ebiten.KeyBracketLeft) {
 		a.head.SetSpeed(a.head.Speed() - speedStep)
-		a.showNotice("speed " + ui.SpeedLabel(a.head.Speed()))
+		a.showNotice(i18n.Tf("speed %s", ui.SpeedLabel(a.head.Speed())))
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyBracketRight) {
 		a.head.SetSpeed(a.head.Speed() + speedStep)
-		a.showNotice("speed " + ui.SpeedLabel(a.head.Speed()))
+		a.showNotice(i18n.Tf("speed %s", ui.SpeedLabel(a.head.Speed())))
 	}
 	if a.engine == nil {
 		return
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyMinus) {
 		a.nudgeVolume(-2 * volumeStep)
-		a.showNotice("backing " + percent(a.engine.Volume()))
+		a.showNotice(i18n.Tf("backing %s", percent(a.engine.Volume())))
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyEqual) {
 		a.nudgeVolume(2 * volumeStep)
-		a.showNotice("backing " + percent(a.engine.Volume()))
+		a.showNotice(i18n.Tf("backing %s", percent(a.engine.Volume())))
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyM) {
 		// Three steps rather than a continuous control: monitoring is either
@@ -248,7 +274,7 @@ func (a *app) handleMix() {
 			a.engine.SetMonitor(0)
 		}
 		a.cfg.Monitor = a.engine.Monitor()
-		a.showNotice("guitar monitor " + percent(a.engine.Monitor()))
+		a.showNotice(i18n.Tf("guitar monitor %s", percent(a.engine.Monitor())))
 	}
 }
 
@@ -271,11 +297,20 @@ func (a *app) showNotice(text string) {
 	a.notice, a.noticeTicks = text, noticeFrames
 }
 
-func onOff(v bool) string {
-	if v {
-		return "on"
+// adjustmentWord is what the progressive rule did, in the player's language.
+//
+// practice.Adjustment.String() stays English: it is also what --dry-run prints
+// and what a log line says, and those two readers are not the same person as
+// the one watching the notice go by.
+func adjustmentWord(a practice.Adjustment) string {
+	switch a {
+	case practice.SpeedUp:
+		return i18n.T("faster")
+	case practice.SlowDown:
+		return i18n.T("slower")
+	default:
+		return i18n.T("repeat")
 	}
-	return "off"
 }
 
 // showsTab and showsStaff say which readings are on screen. Both at once is a

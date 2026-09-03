@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/FullFran/riffhero/internal/audio"
 	"github.com/FullFran/riffhero/internal/audio/codec"
 	"github.com/FullFran/riffhero/internal/config"
 	"github.com/FullFran/riffhero/internal/dsp"
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
 	"github.com/FullFran/riffhero/internal/ui"
 )
@@ -100,12 +102,12 @@ func build(o options, cfg config.Config) (*app, error) {
 	}
 	if track < 0 || track >= len(song.Tracks) {
 		if o.track >= 0 {
-			return nil, fmt.Errorf("track %d does not exist; the score has %d", o.track, len(song.Tracks))
+			return nil, fmt.Errorf(i18n.T("track %d does not exist; the score has %d"), o.track, len(song.Tracks))
 		}
 		track = song.GuitarTrack()
 	}
 	if track < 0 {
-		return nil, fmt.Errorf("%s has no playable notes", song.Title)
+		return nil, fmt.Errorf(i18n.T("%s has no playable notes"), song.Title)
 	}
 
 	a := &app{
@@ -144,7 +146,7 @@ func build(o options, cfg config.Config) (*app, error) {
 	// scripted path still shows the score, the transport and the scoring, and
 	// the warning says exactly what was lost.
 	if err := a.startAudio(); err != nil {
-		a.warnings = append(a.warnings, "audio unavailable: "+err.Error())
+		a.warnings = append(a.warnings, i18n.Tf("audio unavailable: %s", err))
 	}
 	if a.head == nil {
 		a.startScripted()
@@ -256,10 +258,10 @@ func (a *app) applyPlayheadSettings() error {
 		return err
 	}
 	if len(a.song.Grid) == 0 {
-		return fmt.Errorf("this score has no bar grid to loop over")
+		return errors.New(i18n.T("this score has no bar grid to loop over"))
 	}
 	if to > len(a.song.Grid) {
-		return fmt.Errorf("bar %d does not exist; the score has %d", to, len(a.song.Grid))
+		return fmt.Errorf(i18n.T("bar %d does not exist; the score has %d"), to, len(a.song.Grid))
 	}
 	start, end := a.song.Grid.Span(from-1, to-1)
 	a.loop = practice.Loop{A: start, B: end, Enabled: true}
@@ -278,7 +280,7 @@ func (a *app) loadBacking() ([]float32, error) {
 	}
 	pcm, err := codec.DecodeFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("backing track: %w", err)
+		return nil, fmt.Errorf(i18n.T("backing track: %w"), err)
 	}
 	a.backingPath = path
 	return pcm.Conform(a.opts.sampleRate, 2).Data, nil
@@ -374,6 +376,10 @@ func spellingFor(name string) ui.Spelling {
 //
 // Everything the settings screen can change is in here, because a setting that
 // has to be found again every time is one somebody stops changing.
+//
+// Language rides along in a.cfg and is only ever set by somebody choosing one
+// from the menu. Writing the detected language down on every run would freeze
+// whatever the desktop said the first time and stop following it afterwards.
 func (a *app) persist() error {
 	cfg := a.cfg
 	cfg.Speed = a.head.Speed()

@@ -122,29 +122,52 @@ func Next(l Lang) Lang {
 // Detect reads the language out of the environment, the way every other
 // program on the machine does.
 //
-// POSIX order: LC_ALL wins over LC_MESSAGES, which wins over LANG. A value
-// looks like "es_ES.UTF-8" or "es", and "C" or "POSIX" mean no preference
-// rather than a language called C.
+// LANGUAGE first, then LC_ALL, LC_MESSAGES and LANG: that is what gettext
+// does, and it is what somebody has in mind when they set LANGUAGE to run a
+// Spanish desktop in English. LANGUAGE is also the one that may hold a whole
+// list, "es:pt:en", meaning try these in order. The rest look like
+// "es_ES.UTF-8", and "C" or "POSIX" mean no preference rather than a language
+// called C.
 func Detect(lookup func(string) string) Lang {
-	for _, name := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
+	for _, name := range []string{"LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"} {
 		v := strings.TrimSpace(lookup(name))
 		if v == "" || v == "C" || v == "POSIX" {
 			continue
 		}
-		// es_ES.UTF-8@euro -> es
-		v, _, _ = strings.Cut(v, "@")
-		v, _, _ = strings.Cut(v, ".")
-		v, _, _ = strings.Cut(v, "_")
-		if l := Lang(strings.ToLower(v)); l.Valid() {
-			return l
+		var asked bool
+		for _, tag := range strings.Split(v, ":") {
+			l, ok := parseTag(tag)
+			if !ok {
+				continue
+			}
+			asked = true
+			if l.Valid() {
+				return l
+			}
 		}
-		// A language we do not speak is still an answer: the player has said
-		// what they want and it is not English by default. There is nothing
-		// better to give them than English, but there is no point reading the
-		// next variable either.
-		return Default
+		if asked {
+			// A language we do not speak is still an answer: the player has
+			// said what they want and it is not English by default. There is
+			// nothing better to give them than English, but there is no point
+			// reading the next variable either - it says the same thing.
+			return Default
+		}
 	}
 	return Default
+}
+
+// parseTag reduces "es_ES.UTF-8@euro" to "es". Not a locale parser: the only
+// question here is which of two languages to speak.
+func parseTag(tag string) (Lang, bool) {
+	tag = strings.TrimSpace(tag)
+	tag, _, _ = strings.Cut(tag, "@")
+	tag, _, _ = strings.Cut(tag, ".")
+	tag, _, _ = strings.Cut(tag, "_")
+	tag, _, _ = strings.Cut(tag, "-")
+	if tag == "" || tag == "C" || tag == "POSIX" {
+		return "", false
+	}
+	return Lang(strings.ToLower(tag)), true
 }
 
 func catalogue(l Lang) map[string]string {

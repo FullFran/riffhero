@@ -52,6 +52,9 @@ accuracy 93%    combo x24    speed 0.75x    loop bars 9-12
 - **An interface**: a title screen, a file browser, a settings screen that
   reaches every setting there is, a device picker with a meter per input, and
   calibration without leaving the app.
+- **English and Spanish**, switched from the menu while the app is running and
+  picked up from the desktop on a first run. Every line the player reads goes
+  through one catalogue, including what the terminal modes print.
 
 ## Getting started
 
@@ -64,10 +67,28 @@ make run
 
 That opens the app on its title screen, and everything else is reachable from
 there: choose a song, choose a backing track, pick your interface, measure the
-latency, switch between tablature and notation. Nothing has to be set on the
-command line — the flags exist, and are listed below, but they are set before
-the guitar is plugged in and the interesting questions only become answerable
-afterwards.
+latency, switch between tablature and notation, switch language. Nothing has to
+be set on the command line — the flags exist, and are listed below, but they
+are set before the guitar is plugged in and the interesting questions only
+become answerable afterwards.
+
+`make run` is the way to launch it on a machine with Nix tooling in the shell;
+it goes through `scripts/with-system-gl.sh`, which pins the app to the system
+OpenGL stack. Everywhere else `./bin/riffhero` on its own is enough, and
+`make run ARGS="song.gp --loop 9-12"` passes flags through.
+
+### Language
+
+The app speaks English and Spanish. On a first run it follows the desktop —
+`LANGUAGE`, then `LC_ALL`, `LC_MESSAGES`, `LANG`, the same order every other
+program uses — so a Spanish desktop opens in Spanish with nothing to configure.
+
+Change it from **the title screen (`6`)** or **SETTINGS → `L`**; the whole
+interface switches on the next frame, and the choice is remembered. `--lang es`
+overrides both for one run.
+
+Only the interface is translated. Note names stay as letters, because that is
+how tablature is written in every language.
 
 ### With an audio interface
 
@@ -130,6 +151,9 @@ everywhere the keyboard does. While playing:
 | `S` | settings |
 | `H` | help |
 
+On the menu screens, every button prints its own key. `L` on the settings
+screen and `6` on the title screen switch language.
+
 ## Options
 
 ```text
@@ -153,11 +177,18 @@ riffhero [score] [flags]
   --calibrate        measure the round-trip latency, store it and exit
   --dry-run          run the practice loop with no window and no device,
                      print the scoreboard and exit
+  --lang es          en or es; the default follows the desktop
   --rate N           sample rate to ask the device for
+  --version          print the version and exit
 ```
 
-Device selection, the measured latency and the last speed are remembered in
-`~/.config/riffhero/config.json`.
+Device selection, the measured latency, the language and the last speed are
+remembered in `~/.config/riffhero/config.json`.
+
+`--dry-run` needs an X display on Linux even though it opens no window:
+Ebitengine brings its window driver up in a package init, so the panic comes
+from loading the package rather than from anything the flag does. Under `ssh`
+or in CI, run it as `xvfb-run -a riffhero --dry-run`.
 
 ## Calibration
 
@@ -183,6 +214,7 @@ make build        # build the app (needs those packages)
 make run          # build and launch; ARGS="song.gp" to pass flags
 make demo         # the built-in phrase with a scripted player
 make smoke        # the whole loop with no window and no device
+make dist         # build and package the release archive, publishing nothing
 make help         # list every target
 ```
 
@@ -194,6 +226,30 @@ are never part of `make check`.
 system OpenGL stack. Nix-based tooling in the shell otherwise redirects driver
 discovery at `/nix/store` builds linked against a newer glibc, and the window
 never opens.
+
+## Releases
+
+Binaries for Linux and Windows are published from a pushed `vX.Y.Z` tag by
+[`.github/workflows/release.yml`](.github/workflows/release.yml). Each target
+is built on its own native runner, because the audio engine vendors C that has
+to compile for the platform and the Linux build links X11 and OpenGL through
+cgo.
+
+Before tagging:
+
+```bash
+make version-check TAG=v0.1.0   # the tag must match the version in the source
+make dist                       # the same archive CI will build
+```
+
+Then bump `defaultVersion` in `internal/buildinfo/buildinfo.go` if it has not
+been bumped, commit, and push the tag. Every release carries a `checksums.txt`
+and a build-provenance attestation:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+gh attestation verify riffhero_v0.1.0_linux_amd64.tar.gz --repo FullFran/riffhero
+```
 
 See [`PLAN.md`](PLAN.md), [`WORK.md`](WORK.md) and
 [`docs/architecture.md`](docs/architecture.md).

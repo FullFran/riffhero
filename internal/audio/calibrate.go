@@ -111,15 +111,25 @@ type CalibrationError struct {
 	Captured, Wanted int
 }
 
+// The three sentences, as format strings, exported so the screen that shows
+// them in another language keys on the same English this package prints. Two
+// copies of the same sentence is how a screen quietly reverts to English: the
+// copy gets edited, the translation still matches the other one, and no test
+// can tell.
+const (
+	HeardNothingText   = "the input heard almost nothing (peak %.0f dBFS): check it is the right device and that it is not muted"
+	NotRecordingText   = "only captured %d of %d frames; is the input device recording?"
+	ClicksNotFoundText = "could not pick the clicks out of what came back (confidence %.0f%%, peak %.0f dBFS): turn the output up, move the microphone closer, or quieten the room"
+)
+
 func (e *CalibrationError) Error() string {
 	switch e.Reason {
 	case HeardNothing:
-		return fmt.Sprintf("the input heard almost nothing (peak %.0f dBFS): check it is the right device and that it is not muted", e.PeakDB)
+		return fmt.Sprintf(HeardNothingText, e.PeakDB)
 	case NotRecording:
-		return fmt.Sprintf("only captured %d of %d frames; is the input device recording?", e.Captured, e.Wanted)
+		return fmt.Sprintf(NotRecordingText, e.Captured, e.Wanted)
 	default:
-		return fmt.Sprintf("could not pick the clicks out of what came back (confidence %.0f%%, peak %.0f dBFS): turn the output up, move the microphone closer, or quieten the room",
-			e.Confidence*100, e.PeakDB)
+		return fmt.Sprintf(ClicksNotFoundText, e.Confidence*100, e.PeakDB)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/library"
 	"github.com/FullFran/riffhero/internal/ui"
 )
@@ -98,11 +99,11 @@ func (a *app) questionButtons() []button {
 	w, h := 200.0, 52.0
 	y := float64(a.height)/2 + 40
 	if a.onNo == nil {
-		return []button{{x: (float64(a.width) - w) / 2, y: y, w: w, h: h, label: "OK", key: "ENTER"}}
+		return []button{{x: (float64(a.width) - w) / 2, y: y, w: w, h: h, label: i18n.T("OK"), key: "ENTER"}}
 	}
 	return []button{
-		{x: float64(a.width)/2 - w - 8, y: y, w: w, h: h, label: "YES", key: "Y"},
-		{x: float64(a.width)/2 + 8, y: y, w: w, h: h, label: "NO", key: "N"},
+		{x: float64(a.width)/2 - w - 8, y: y, w: w, h: h, label: i18n.T("YES"), key: i18n.T("Y")},
+		{x: float64(a.width)/2 + 8, y: y, w: w, h: h, label: i18n.T("NO"), key: i18n.T("N")},
 	}
 }
 
@@ -117,12 +118,22 @@ func (a *app) updateAsking() {
 	switch {
 	case buttons[0].clicked(),
 		inpututil.IsKeyJustPressed(ebiten.KeyEnter),
-		a.onNo != nil && inpututil.IsKeyJustPressed(ebiten.KeyY):
+		a.onNo != nil && pressed(buttons[0].key):
 		answer(a.onYes)
 	case len(buttons) > 1 && buttons[1].clicked(),
-		a.onNo != nil && (inpututil.IsKeyJustPressed(ebiten.KeyN) || inpututil.IsKeyJustPressed(ebiten.KeyEscape)):
+		a.onNo != nil && (pressed(buttons[1].key) || inpututil.IsKeyJustPressed(ebiten.KeyEscape)):
 		answer(a.onNo)
 	}
+}
+
+// pressed reports whether the key drawn on a button has just been hit.
+//
+// Reading the caption back rather than naming a key here is what stops the two
+// drifting apart: the answer button says Y in English and S in Spanish, and
+// there is no second place to remember to change.
+func pressed(caption string) bool {
+	k := keyNamed(caption)
+	return k != ebiten.KeyMax && inpututil.IsKeyJustPressed(k)
 }
 
 func (a *app) drawAsking(screen *ebiten.Image) {
@@ -166,7 +177,7 @@ var titleRows = []titleRow{
 		label: "BACKING TRACK", key: "3",
 		note: func(a *app) string {
 			if a.backingPath == "" {
-				return "none"
+				return i18n.T("none")
 			}
 			return shortPath(a.backingPath)
 		},
@@ -184,7 +195,12 @@ var titleRows = []titleRow{
 		do:   func(a *app) { a.openCalibration() },
 	},
 	{
-		label: "QUIT", key: "6",
+		label: "LANGUAGE / IDIOMA", key: "6",
+		note: func(a *app) string { return i18n.Current().Endonym() },
+		do:   func(a *app) { a.setLanguage(i18n.Next(i18n.Current())) },
+	},
+	{
+		label: "QUIT", key: "7",
 		do: func(a *app) { a.confirmQuit() },
 	},
 }
@@ -194,7 +210,7 @@ func (a *app) titleButtons() []button {
 	h := menuRowHeight(pitch)
 	out := make([]button, 0, len(titleRows))
 	for i, r := range titleRows {
-		b := button{x: x, y: top + float64(i)*pitch, w: w, h: h, label: r.label, key: r.key}
+		b := button{x: x, y: top + float64(i)*pitch, w: w, h: h, label: i18n.T(r.label), key: r.key}
 		if r.off != nil {
 			b.off = r.off(a)
 		}
@@ -238,7 +254,7 @@ func (a *app) updateTitle() {
 func (a *app) drawTitle(screen *ebiten.Image) {
 	screen.Fill(menuFace)
 	drawHeading(screen, "RIFFHERO", 40, 40)
-	drawDim(screen, "guitar practice: plug in, play, see what landed", 40, 76)
+	drawDim(screen, i18n.T("guitar practice: plug in, play, see what landed"), 40, 76)
 
 	buttons := a.titleButtons()
 	for _, b := range buttons {
@@ -275,9 +291,11 @@ func (a *app) drawTitleFooter(screen *ebiten.Image, buttons []button) {
 		return
 	}
 	if a.det != nil {
-		drawDim(screen, "input", 40, y)
-		drawMeter(screen, 90, float64(y)+3, 140, 7, ui.MeterLevel(a.det.Level()), menuGood)
-		drawDim(screen, fmt.Sprintf("%5.1f dB", a.det.Level()), 244, y)
+		label := i18n.T("input")
+		drawDim(screen, label, 40, y)
+		meterX := 40 + textWidth(label) + 20
+		drawMeter(screen, meterX, float64(y)+3, 140, 7, ui.MeterLevel(a.det.Level()), menuGood)
+		drawDim(screen, fmt.Sprintf("%5.1f dB", a.det.Level()), int(meterX)+154, y)
 		y += lineH
 	}
 	if a.noticeTicks > 0 && y <= a.height-40 {
@@ -288,7 +306,7 @@ func (a *app) drawTitleFooter(screen *ebiten.Image, buttons []button) {
 // confirmQuit asks first. ESC is the key somebody presses on the way out of a
 // menu, and on this screen it was the key that closed the app.
 func (a *app) confirmQuit() {
-	a.ask("quit RiffHero?", func() { a.quitting = true }, a.openTitle)
+	a.ask(i18n.T("quit RiffHero?"), func() { a.quitting = true }, a.openTitle)
 }
 
 // startPractice leaves the menus and puts the playhead at the top of whatever
@@ -302,31 +320,31 @@ func (a *app) startPractice() {
 func (a *app) inputSummary() string {
 	switch {
 	case a.opts.noAudio:
-		return "no audio (scripted performance)"
+		return i18n.T("no audio (scripted performance)")
 	case a.det == nil:
-		return "no device"
+		return i18n.T("no device")
 	case a.input != nil:
 		return a.input.Name
 	}
-	return "default device"
+	return i18n.T("default device")
 }
 
 func (a *app) latencySummary() string {
 	if a.det == nil {
-		return "needs a device"
+		return i18n.T("needs a device")
 	}
 	ms := a.clock.Seconds(a.det.LatencyOffset) * 1000
 	if !a.calibrated {
-		return fmt.Sprintf("%.0f ms, estimated", ms)
+		return i18n.Tf("%.0f ms, estimated", ms)
 	}
-	return fmt.Sprintf("%.0f ms, measured", ms)
+	return i18n.Tf("%.0f ms, measured", ms)
 }
 
 // shortPath is a file name with just enough of its directory to tell two songs
 // with the same name apart.
 func shortPath(path string) string {
 	if path == "" {
-		return "built-in phrase"
+		return i18n.T("built-in phrase")
 	}
 	return filepath.Join(filepath.Base(filepath.Dir(path)), filepath.Base(path))
 }
@@ -342,7 +360,7 @@ func wrapText(text string, cells int) []string {
 		switch {
 		case line == "":
 			line = word
-		case len(line)+1+len(word) <= cells:
+		case cellsIn(line)+1+cellsIn(word) <= cells:
 			line += " " + word
 		default:
 			out = append(out, line)
@@ -354,6 +372,11 @@ func wrapText(text string, cells int) []string {
 	}
 	return out
 }
+
+// cellsIn is how many character cells a string occupies. Not len: an accent
+// is two bytes and one cell, and this is the measurement the whole menu is
+// laid out with.
+func cellsIn(s string) int { return len([]rune(s)) }
 
 func splitWords(text string) []string {
 	var out []string
