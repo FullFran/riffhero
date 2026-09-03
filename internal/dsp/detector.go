@@ -199,11 +199,17 @@ func (d *Detector) Reset() {
 // instead: the question stops being "what note is this?" and becomes "are
 // these notes present?", which a magnitude spectrum can actually answer.
 //
-// tolerance is how far from a written event an attack may land and still be
-// treated as that event, and should be the same window the scoring session
-// uses to accept a note. Notes must already be on the practice timeline.
-func (d *Detector) Expect(notes []practice.Note, tolerance practice.Frame) {
-	events := practice.Events(notes, tolerance)
+// The two tolerances answer different questions and sharing one number gets
+// both wrong. strum is how far apart two notes may be *written* and still be
+// one chord — a few tens of milliseconds, the time a pick takes to cross the
+// strings; any larger and a fast single-note run is verified as a series of
+// chords. window is how late or early an *attack* may be and still belong to
+// that chord, which is the player's timing and is much wider; any smaller and
+// a player slightly behind the beat loses chord verification altogether.
+//
+// Notes must already be on the practice timeline.
+func (d *Detector) Expect(notes []practice.Note, strum, window practice.Frame) {
+	events := practice.Events(notes, strum)
 	if len(events) == 0 {
 		d.ClearExpect()
 		return
@@ -231,7 +237,7 @@ func (d *Detector) Expect(notes []practice.Note, tolerance practice.Frame) {
 			if delta < 0 {
 				delta = -delta
 			}
-			if delta <= tolerance && (best < 0 || delta < bestDelta) {
+			if delta <= window && (best < 0 || delta < bestDelta) {
 				best, bestDelta = c, delta
 			}
 		}

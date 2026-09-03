@@ -61,7 +61,7 @@ func TestDetectorResolvesAPowerChordWhenTheScoreExpectsOne(t *testing.T) {
 	}
 
 	det := NewDetector(rate)
-	det.Expect(notes, practice.Frame(rate/10))
+	det.Expect(notes, practice.Frame(rate/100), practice.Frame(rate/10))
 
 	got := chordScore(t, det, signal, 512)
 
@@ -94,7 +94,7 @@ func TestExpectedChordScoresThroughTheSession(t *testing.T) {
 	session := practice.NewSession(notes, practice.SessionConfig{Windows: windows, MaxCents: 40})
 
 	det := NewDetector(rate)
-	det.Expect(notes, windows.Good)
+	det.Expect(notes, clock.Frames(practice.DefaultStrumToleranceSeconds), windows.Good)
 
 	for _, d := range chordScore(t, det, signal, 512) {
 		session.Feed(d)
@@ -117,7 +117,7 @@ func TestExpectOnlyEngagesForSimultaneousNotes(t *testing.T) {
 	}
 
 	det := NewDetector(rate)
-	det.Expect(notes, 2400)
+	det.Expect(notes, 2400, 2400)
 
 	if got := det.tracker.Expect(1000); got != nil {
 		t.Fatalf("a lone note asked for chord verification: %v", got)
@@ -136,7 +136,7 @@ func TestExpectReportsTheChordAtAnAttack(t *testing.T) {
 	}
 
 	det := NewDetector(rate)
-	det.Expect(notes, 2400)
+	det.Expect(notes, 2400, 2400)
 
 	got := det.tracker.Expect(1050)
 	if len(got) != 3 {
@@ -150,9 +150,43 @@ func TestExpectReportsTheChordAtAnAttack(t *testing.T) {
 
 func TestClearExpectRestoresMonophonicDetection(t *testing.T) {
 	det := NewDetector(testSampleRate)
-	det.Expect([]practice.Note{{Start: 0, Duration: 100, MIDI: 40}, {Start: 0, Duration: 100, MIDI: 47}}, 2400)
+	det.Expect([]practice.Note{{Start: 0, Duration: 100, MIDI: 40}, {Start: 0, Duration: 100, MIDI: 47}}, 2400, 2400)
 	det.ClearExpect()
 	if det.tracker.Expect != nil {
 		t.Fatal("ClearExpect left the hook installed")
+	}
+}
+
+func TestExpectSeparatesTheStrumFromTheTimingWindow(t *testing.T) {
+	// Two numbers, two questions. A wide grouping tolerance turns a fast run
+	// into chords; a narrow matching window denies chord verification to a
+	// player who is slightly behind the beat. Sharing one gets one of them
+	// wrong whichever value is chosen.
+	const rate = testSampleRate
+	notes := []practice.Note{
+		{Start: 10000, Duration: 4800, MIDI: 40},
+		{Start: 10000, Duration: 4800, MIDI: 47},
+		// Its own note at any sane strum tolerance, and far enough away that
+		// it cannot compete with the chord for a late attack.
+		{Start: 40000, Duration: 4800, MIDI: 52},
+	}
+
+	det := NewDetector(rate)
+	det.Expect(notes, 1440 /* 30 ms */, 5280 /* 110 ms */)
+
+	if got := det.tracker.Expect(10100); len(got) != 2 {
+		t.Fatalf("the written chord resolved to %v, want two pitches", got)
+	}
+	// A player 90 ms late on that chord is still playing that chord.
+	if got := det.tracker.Expect(10000 + 4320); len(got) != 2 {
+		t.Fatalf("an attack 90 ms late resolved to %v; the timing window should cover it", got)
+	}
+	// The single note later on is not part of the chord.
+	if got := det.tracker.Expect(40000); got != nil {
+		t.Fatalf("a lone note was grouped into the chord: %v", got)
+	}
+	// And an attack nowhere near anything written belongs to nothing.
+	if got := det.tracker.Expect(25000); got != nil {
+		t.Fatalf("an attack between events resolved to %v", got)
 	}
 }

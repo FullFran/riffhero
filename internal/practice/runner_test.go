@@ -194,13 +194,15 @@ func TestRunnerLeavesSpeedAloneWhenNotAdaptive(t *testing.T) {
 type recordingExpecter struct {
 	calls  int
 	notes  []Note
+	strum  Frame
 	window Frame
 }
 
-func (e *recordingExpecter) Expect(notes []Note, tolerance Frame) {
+func (e *recordingExpecter) Expect(notes []Note, strum, window Frame) {
 	e.calls++
 	e.notes = notes
-	e.window = tolerance
+	e.strum = strum
+	e.window = window
 }
 
 func TestRunnerTellsTheDetectorWhatToExpect(t *testing.T) {
@@ -212,15 +214,19 @@ func TestRunnerTellsTheDetectorWhatToExpect(t *testing.T) {
 	if exp.calls != 1 || len(exp.notes) != len(song) {
 		t.Fatalf("after construction: %d calls, %d notes", exp.calls, len(exp.notes))
 	}
-	// The strum tolerance, not the scoring window: at the Good window a
-	// sixteenth-note run at 150 BPM would be verified as a series of chords.
+	// Grouping uses the strum tolerance — at the Good window a sixteenth-note
+	// run at 150 BPM would be verified as a series of chords — while matching
+	// an attack to a chord uses the player's timing window.
 	want := testClock().Frames(DefaultStrumToleranceSeconds)
-	if exp.window != want {
-		t.Fatalf("tolerance %d, want the strum tolerance %d", exp.window, want)
+	if exp.strum != want {
+		t.Fatalf("strum %d, want %d", exp.strum, want)
 	}
-	if exp.window >= cfg.Session.Windows.Good {
-		t.Fatalf("the strum tolerance (%d) must be well under the Good window (%d)",
-			exp.window, cfg.Session.Windows.Good)
+	if exp.window != cfg.Session.Windows.Good {
+		t.Fatalf("window %d, want the Good window %d", exp.window, cfg.Session.Windows.Good)
+	}
+	if exp.strum >= exp.window {
+		t.Fatalf("the strum tolerance (%d) must be well under the timing window (%d)",
+			exp.strum, exp.window)
 	}
 
 	r.SetLoop(Loop{A: song[4].Start, B: song[8].Start, Enabled: true})
@@ -402,7 +408,7 @@ func TestFastRunIsNotMistakenForChords(t *testing.T) {
 		Expecter: exp,
 	})
 
-	for _, e := range Events(exp.notes, exp.window) {
+	for _, e := range Events(exp.notes, exp.strum) {
 		if len(e.Notes) > 1 {
 			t.Fatalf("a run 100 ms apart was grouped into an event of %d notes", len(e.Notes))
 		}

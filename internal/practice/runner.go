@@ -53,8 +53,13 @@ type RunnerConfig struct {
 const DefaultStrumToleranceSeconds = 0.030
 
 // Expecter is the part of the detector that can be told what to expect.
+//
+// strum is how far apart two notes may be written and still be one chord;
+// window is how far an attack may land from that chord and still belong to it.
+// They are separate because they measure different things — the score's
+// notation and the player's timing — and one number cannot be both.
 type Expecter interface {
-	Expect(notes []Note, tolerance Frame)
+	Expect(notes []Note, strum, window Frame)
 }
 
 // Update is what one turn of the loop did, for the UI to render.
@@ -184,7 +189,7 @@ func (r *Runner) rescope() {
 	r.laps = r.head.Laps()
 
 	if r.cfg.Expecter != nil {
-		r.cfg.Expecter.Expect(r.scoped, r.cfg.Strum)
+		r.cfg.Expecter.Expect(r.scoped, r.cfg.Strum, r.cfg.Session.Windows.Good)
 	}
 }
 
