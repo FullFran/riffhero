@@ -49,7 +49,9 @@ func TestClipMarksWhatItCut(t *testing.T) {
 	if len([]rune(got)) != 10 {
 		t.Fatalf("clipped to %d runes: %q", len([]rune(got)), got)
 	}
-	if !strings.HasSuffix(got, "…") {
+	// ASCII, because Ebiten's debug font stops at U+00FF: an ellipsis would
+	// draw as three holes.
+	if !strings.HasSuffix(got, ">") {
 		t.Fatalf("%q does not say it was cut", got)
 	}
 	if got := clip("abc", 0); got != "" {
@@ -58,9 +60,46 @@ func TestClipMarksWhatItCut(t *testing.T) {
 }
 
 func TestClipCountsRunesNotBytes(t *testing.T) {
-	// A song title with an accent in it must not be cut mid-character.
+	// A song title with an accent in it must not be cut mid-character. An
+	// accent is inside Latin-1, so the font can draw it.
 	if got := clip("canción", 10); got != "canción" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestNothingDrawnUsesARuneTheFontLacks(t *testing.T) {
+	// Ebiten's debug font is a 32-by-8 atlas of the first 256 code points.
+	// Anything past U+00FF draws nothing at all and still advances the cursor,
+	// so an em dash is a hole in the line and an ellipsis is three. This is
+	// the test that stops one creeping back in.
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two exceptions, both correct: the window title is drawn by the window
+	// manager, and truncate is only used on stdout by --list-tracks.
+	allowed := map[string]bool{"main.go": true}
+
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") || allowed[name] {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(src), "\n") {
+			code, _, _ := strings.Cut(line, "//")
+			if !strings.Contains(code, `"`) {
+				continue
+			}
+			for _, r := range code {
+				if r > 0xff {
+					t.Errorf("%s: %q is past U+00FF and would draw as a gap: %s", name, r, strings.TrimSpace(line))
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -103,7 +142,7 @@ func TestPercent(t *testing.T) {
 }
 
 func TestStaffFitsWhateverBandItIsGiven(t *testing.T) {
-	for _, band := range [][2]float64{{100, 400}, {100, 130}, {0, 1000}} {
+	for _, band := range [][2]float64{{100, 400}, {100, 130}, {0, 1000}, {0, 60}} {
 		s := staffFor(band[0], band[1])
 		if s.LineY(0) < band[0]-1 {
 			t.Fatalf("band %v: top line at %v", band, s.LineY(0))
@@ -111,8 +150,29 @@ func TestStaffFitsWhateverBandItIsGiven(t *testing.T) {
 		if s.LineY(4) > band[1]+1 {
 			t.Fatalf("band %v: bottom line at %v", band, s.LineY(4))
 		}
-		if s.LineGap < 5 {
+		// Below four pixels the five lines are a smudge; a band too small for
+		// that overflows rather than shrinking further.
+		if s.LineGap < 4 {
 			t.Fatalf("band %v: lines %v apart, too close to read", band, s.LineGap)
+		}
+	}
+}
+
+func TestTheStaffLeavesRoomForWhatHangsOffIt(t *testing.T) {
+	// A guitar's low E is three ledger lines below the staff and its stem
+	// hangs another three gaps past that. Reserving only the five lines put
+	// that note through the tablature underneath, and the high notes behind
+	// the header.
+	for _, band := range [][2]float64{{90, 575}, {90, 300}, {200, 260}} {
+		s := staffFor(band[0], band[1])
+		top, bottom := staffExtent(s)
+		if height := bottom - top; height <= s.LineY(4)-s.LineY(0) {
+			t.Fatalf("band %v: the reserved extent %v is no bigger than the staff itself", band, height)
+		}
+		// Centred: as much room above as below.
+		above, below := s.LineY(0)-band[0], band[1]-s.LineY(4)
+		if diff := above - below; diff > 1 || diff < -1 {
+			t.Fatalf("band %v: %v above the staff and %v below", band, above, below)
 		}
 	}
 }

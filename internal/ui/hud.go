@@ -75,7 +75,7 @@ func BuildHUD(in HUDInput) HUD {
 
 	h.Title = strings.TrimSpace(in.Title)
 	if in.Artist != "" {
-		h.Title += " — " + in.Artist
+		h.Title += " - " + in.Artist
 	}
 	if in.Track != "" {
 		h.Title += "   [" + in.Track + "]"
@@ -161,7 +161,7 @@ func inputLine(in HUDInput) string {
 	// A pitch is only shown while a string is actually sounding. Leaving the
 	// last note up after it has died reads as a detector stuck on it, which is
 	// the one thing a player would then go looking for.
-	pitch := "—"
+	pitch := "-"
 	if in.HasDetected && in.Present {
 		pitch = fmt.Sprintf("%s %s (%.0f%%)",
 			NoteName(in.Detected.MIDI), Cents(in.Detected.CentsError), in.Detected.Confidence*100)
@@ -185,13 +185,13 @@ func warnings(in HUDInput) []string {
 		// A dropped sample is a hole in the timeline, not just lost audio, and
 		// from the player's side it is indistinguishable from their own
 		// mistake. Saying so is the only honest option.
-		out = append(out, fmt.Sprintf("dropped %d input samples — the analysis is falling behind", in.Dropped))
+		out = append(out, fmt.Sprintf("dropped %d input samples - the analysis is falling behind", in.Dropped))
 	}
 	if in.Underruns > 0 {
-		out = append(out, fmt.Sprintf("%d audio underruns — the backing track stuttered", in.Underruns))
+		out = append(out, fmt.Sprintf("%d audio underruns - the backing track stuttered", in.Underruns))
 	}
 	if in.Live && !in.Calibrated {
-		out = append(out, "latency not calibrated — run with --calibrate")
+		out = append(out, "latency not calibrated - measure it from the settings screen")
 	}
 	return out
 }

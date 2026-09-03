@@ -128,3 +128,28 @@ func TestBandSitsBetweenThePanels(t *testing.T) {
 		t.Fatalf("the band ends at %v, under the footer", bottom)
 	}
 }
+
+func TestTheTabNeverStartsAboveItsBand(t *testing.T) {
+	// A band thinner than six strings at the minimum spacing used to get a
+	// negative centring offset, which put string 1 above the space the layout
+	// was given: over the staff in "both" mode, or under the header in a short
+	// tab-only window. Overflowing downwards is untidy; overflowing upwards
+	// draws two readings on top of each other.
+	clock := practice.Clock{SampleRate: 48000}
+	for _, band := range [][2]float64{{100, 400}, {148, 182}, {0, 20}, {300, 300}} {
+		l := NewLayout(1000, 900, clock).WithBand(band[0], band[1])
+		if got := l.StringY(1); got < band[0]-0.001 {
+			t.Fatalf("band %v: the top string is at %v", band, got)
+		}
+	}
+}
+
+func TestATinyWindowKeepsTheTabBelowTheHeader(t *testing.T) {
+	clock := practice.Clock{SampleRate: 48000}
+	for _, h := range []float64{200, 250, 282, 300, 400} {
+		l := NewLayout(1000, h, clock)
+		if got := l.StringY(1); got < HeaderHeight {
+			t.Fatalf("height %v: the top string is at %v, under the header", h, got)
+		}
+	}
+}

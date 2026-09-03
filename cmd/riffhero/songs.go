@@ -63,6 +63,7 @@ type browseRow struct {
 	note  string
 	dir   string // set for something to descend into
 	file  string // set for something to open
+	clear bool   // set for the row that removes the current backing track
 }
 
 func (a *app) browseRows() []browseRow {
@@ -72,6 +73,12 @@ func (a *app) browseRows() []browseRow {
 	// one every other file browser puts at the top.
 	if parent := a.browse.listing.Parent; parent != "" {
 		out = append(out, browseRow{label: "..", note: "up", dir: parent})
+	}
+	// Choosing a backing track was a one-way door: nothing called clearBacking
+	// and the choice persisted, so going back to practising unaccompanied meant
+	// editing the config file by hand.
+	if a.browse.kind == library.Backing && a.backingPath != "" {
+		out = append(out, browseRow{label: "NO BACKING TRACK", note: "practise unaccompanied", clear: true})
 	}
 	for _, p := range a.browse.places {
 		if p.Path == a.browse.dir {
@@ -147,6 +154,9 @@ func (a *app) updateBrowser() {
 	switch picked := rows[chosen]; {
 	case picked.dir != "":
 		a.browseTo(picked.dir)
+	case picked.clear:
+		a.clearBacking()
+		a.openTitle()
 	case a.browse.kind == library.Score:
 		a.chooseScore(picked.file)
 	default:
@@ -197,6 +207,7 @@ func (a *app) drawBrowser(screen *ebiten.Image) {
 	if a.browse.kind == library.Backing {
 		heading = "CHOOSE A BACKING TRACK"
 	}
+	_ = heading
 	drawHeading(screen, heading, 40, 34)
 	drawDim(screen, clip(a.browse.dir, (a.width-80)/glyphW), 40, 74)
 	drawDim(screen, "ENTER open    BACKSPACE up    ESC back", 40, 92)
@@ -214,6 +225,9 @@ func (a *app) drawBrowser(screen *ebiten.Image) {
 		drawDim(screen, "nothing here that can be opened", 44, 124)
 	case len(rows) > len(buttons):
 		drawDim(screen, fmt.Sprintf("%d of %d", a.browse.scroll+len(buttons), len(rows)), 40, a.height-40)
+	}
+	if a.noticeTicks > 0 {
+		drawTinted(screen, a.notice, 260, a.height-40, menuAccent)
 	}
 }
 
@@ -275,7 +289,12 @@ func (a *app) retimeSong() {
 		a.player.SetLoop(practice.Loop{})
 		a.player.Seek(0)
 	} else {
+		// A new score starts at the top with no region — chooseScore clears
+		// a.loop to match — but the practice speed is the player's setting and
+		// not the song's, so it comes across.
+		speed := a.head.Speed()
 		a.startScripted()
+		a.head.SetSpeed(speed)
 	}
 	a.buildRunner()
 }

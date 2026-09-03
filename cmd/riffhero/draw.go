@@ -100,8 +100,21 @@ func (a *app) drawGrid(screen *ebiten.Image, now practice.Frame) {
 		}
 		x := float32(a.layout.NoteX(now, bar.Start))
 		vector.StrokeLine(screen, x, top, x, bottom, 1, colorBarLine, false)
-		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%d", bar.Number), int(x)+3, int(top)-14)
+		a.drawBarNumber(screen, bar.Number, x)
 	}
+}
+
+// drawBarNumber puts a bar's number above everything on screen rather than
+// above the tab. Above the tab meant on top of the staff's low notes, which in
+// this music is the open low E on the downbeat — the number and the note in
+// the same place, every bar.
+func (a *app) drawBarNumber(screen *ebiten.Image, number int, x float32) {
+	top, _ := a.readingBand()
+	y := int(top) - lineH
+	if y < ui.HeaderHeight+2 {
+		y = ui.HeaderHeight + 2
+	}
+	drawTinted(screen, fmt.Sprintf("%d", number), int(x)+3, y, menuDim)
 }
 
 func (a *app) drawStrings(screen *ebiten.Image) {
@@ -190,7 +203,7 @@ func (a *app) drawHUD(screen *ebiten.Image) {
 	ebitenutil.DebugPrintAt(screen, hud.Score, 16, bottom-64)
 	ebitenutil.DebugPrintAt(screen, hud.Practice, 16, bottom-48)
 	ebitenutil.DebugPrintAt(screen, hud.Input, 16, bottom-32)
-	ebitenutil.DebugPrintAt(screen, "H help    ESC quit", int(a.layout.Width)-150, bottom-16)
+	drawDim(screen, "H help    ESC menu", int(a.layout.Width)-150, bottom-16)
 
 	a.drawMeter(screen, bottom)
 
@@ -230,7 +243,7 @@ func (a *app) readingBand() (top, bottom float32) {
 	}
 
 	if a.showsStaff() {
-		stretch(a.staff.LineY(0)-a.staff.LineGap*3, a.staff.LineY(4)+a.staff.LineGap*3)
+		stretch(staffExtent(a.staff))
 	}
 	if a.showsTab() {
 		stretch(a.tab.StringY(1)-26, a.tab.StringY(6)+26)
@@ -284,7 +297,7 @@ func (a *app) hudInput() ui.HUDInput {
 		Rating:   session.LastRating(),
 		HasRatng: session.HasRating(),
 		Live:     a.live(),
-		Backing:  a.opts.backing != "",
+		Backing:  a.backingPath != "",
 
 		Detected:    a.lastNote,
 		HasDetected: a.hasNote,
@@ -325,21 +338,51 @@ var helpLines = []string{
 	"  TAB        next track",
 	"",
 	"  H          this help",
-	"  ESC        quit",
+	"  ESC        back to the menu",
 	"",
 	"Loop a hard bar, turn on progressive practice and play it clean:",
 	"the speed comes up on its own until you are at tempo.",
 }
 
+// drawHelp is the key list, clipped to the window rather than centred blindly.
+//
+// Centred on a window shorter than the panel, the first lines land above the
+// top edge and the last below the bottom, and at 400 px wide the left margin
+// goes negative and cuts two characters off every line. What does not fit is
+// scrolled off the end instead, which loses the last few keys rather than the
+// first few and the left of all of them.
 func (a *app) drawHelp(screen *ebiten.Image) {
-	w, h := float32(460), float32(len(helpLines)*14+32)
+	const pad, lineStep = 18, 14
+
+	w := float32(460)
+	if limit := float32(a.layout.Width) - 24; w > limit {
+		w = limit
+	}
 	x := float32(a.layout.Width)/2 - w/2
+	if x < 12 {
+		x = 12
+	}
+
+	visible := len(helpLines)
+	if room := (int(a.layout.Height) - 40 - 32) / lineStep; visible > room {
+		visible = room
+	}
+	if visible < 1 {
+		return
+	}
+	h := float32(visible*lineStep + 32)
 	y := float32(a.layout.Height)/2 - h/2
+	if y < 12 {
+		y = 12
+	}
 
 	vector.DrawFilledRect(screen, x, y, w, h, colorPanel, false)
 	vector.StrokeRect(screen, x, y, w, h, 1, colorString, false)
-	for i, line := range helpLines {
-		ebitenutil.DebugPrintAt(screen, line, int(x)+18, int(y)+16+i*14)
+	for i, line := range helpLines[:visible] {
+		drawTinted(screen, clip(line, int(w-2*pad)/glyphW), int(x)+pad, int(y)+16+i*lineStep, menuInk)
+	}
+	if visible < len(helpLines) {
+		drawDim(screen, "...", int(x)+pad, int(y+h)-16)
 	}
 }
 

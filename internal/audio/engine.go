@@ -138,9 +138,10 @@ type Engine struct {
 
 	stop chan struct{}
 
-	volume  atomic.Uint64
-	monitor atomic.Uint64
-	channel atomic.Uint32
+	volume        atomic.Uint64
+	monitor       atomic.Uint64
+	channel       atomic.Uint32
+	inputChannels atomic.Uint32
 
 	// peaks is the loudest sample each input carried during the last
 	// callback. It is what lets the device screen show which socket the guitar
@@ -227,7 +228,12 @@ func (e *Engine) deviceConfig() (malgo.DeviceConfig, func(), error) {
 	if e.cfg.Playback {
 		out = e.cfg.Output
 	}
-	return cfg, pinDevices(&cfg, in, out), nil
+	// Two statements rather than one: the order of a function call against a
+	// plain operand read inside the same expression is unspecified, and this
+	// call mutates the value being returned beside it. It works on gc today
+	// and there is no reason to depend on that.
+	release := pinDevices(&cfg, in, out)
+	return cfg, release, nil
 }
 
 // deviceConfigFor is the configuration RiffHero asks every device for. It is
@@ -390,6 +396,9 @@ func (e *Engine) onData(outBytes, inBytes []byte, frames uint32) {
 	}
 	inCh := channelsOf(inBytes, n)
 	outCh := channelsOf(outBytes, n)
+	if inCh > 0 {
+		e.inputChannels.Store(uint32(inCh))
+	}
 
 	in := asFloat32(inBytes, n*inCh)
 	out := asFloat32(outBytes, n*outCh)
@@ -552,6 +561,17 @@ func (e *Engine) InputPeaks() [maxMeteredChannels]float64 {
 		out[c] = math.Float64frombits(e.peaks[c].Load())
 	}
 	return out
+}
+
+// InputChannels is how many capture channels the device actually has, as far
+// as the meters are concerned. It is derived from the callback rather than
+// from the config, because the config asked for whatever the device liked.
+func (e *Engine) InputChannels() int {
+	n := int(e.inputChannels.Load())
+	if n > maxMeteredChannels {
+		return maxMeteredChannels
+	}
+	return n
 }
 
 // Channel is the input the detector is listening to.

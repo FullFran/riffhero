@@ -209,7 +209,13 @@ func deviceName(d *audio.Device) string {
 func (a *app) setBacking(pcm []float32) error {
 	a.backing = pcm
 	if a.engine == nil {
+		// The scripted path needs the same hand-over the device path gets.
+		// Without it, choosing a backing track with no sound card silently
+		// reset the speed and left the A-B region drawn on screen but unknown
+		// to the transport actually running.
+		previous := a.head
 		a.startScripted()
+		adoptPlayhead(previous, a.head)
 		a.buildRunner()
 		return nil
 	}

@@ -56,7 +56,7 @@ func (a *app) Update() error {
 		a.lastNote, a.hasNote = update.Fed[n-1].Detected, true
 	}
 	if update.LapDone && a.runner.Adaptive() && update.Adjustment != practice.Repeat {
-		a.showNotice(fmt.Sprintf("lap %.0f%% — %s, now %s",
+		a.showNotice(fmt.Sprintf("lap %.0f%%: %s, now %s",
 			update.LapStats.Accuracy*100, update.Adjustment, ui.SpeedLabel(update.Speed)))
 	}
 	if a.noticeTicks > 0 {
@@ -206,14 +206,14 @@ func (a *app) applyLoop(what string) {
 	if a.loop.Active() {
 		from, to := a.song.Grid.BarAt(a.loop.A), a.song.Grid.BarAt(a.loop.B-1)
 		if from >= 0 && to >= 0 {
-			a.showNotice(fmt.Sprintf("%s — bars %d to %d", what, a.song.Grid[from].Number, a.song.Grid[to].Number))
+			a.showNotice(fmt.Sprintf("%s: bars %d to %d", what, a.song.Grid[from].Number, a.song.Grid[to].Number))
 			return
 		}
-		a.showNotice(fmt.Sprintf("%s — %s to %s", what,
+		a.showNotice(fmt.Sprintf("%s: %s to %s", what,
 			ui.Timecode(a.clock, a.loop.A), ui.Timecode(a.clock, a.loop.B)))
 		return
 	}
-	a.showNotice(what + " — off")
+	a.showNotice(what + ": off")
 }
 
 func (a *app) handleMix() {

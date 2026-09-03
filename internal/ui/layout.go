@@ -49,15 +49,7 @@ func NewLayout(width, height float64, clock practice.Clock) Layout {
 	const top = HeaderHeight + tabMargin
 	bottom := height - FooterHeight - tabMargin
 
-	spacing := (bottom - top) / 5
-	switch {
-	case spacing > maxStringSpacing:
-		spacing = maxStringSpacing
-	case spacing < minStringSpacing:
-		spacing = minStringSpacing
-	}
-	// Whatever the clamp left over goes above and below equally.
-	first := top + ((bottom-top)-spacing*5)/2
+	spacing, first := fitStrings(top, bottom)
 
 	return Layout{
 		Width:           width,
@@ -142,14 +134,30 @@ func (l Layout) Band() (top, bottom float64) {
 // WithBand re-centres the tab inside a narrower band, which is how it makes
 // room for standard notation above it when both readings are shown.
 func (l Layout) WithBand(top, bottom float64) Layout {
-	spacing := (bottom - top) / 5
+	l.StringSpacing, l.TopString = fitStrings(top, bottom)
+	return l
+}
+
+// fitStrings spaces six strings inside a band and says where the first one
+// goes.
+//
+// The centring is done after the clamp, and then the origin is pinned to the
+// top of the band. Without that pin a band thinner than the minimum spacing
+// needs gets a negative offset, and the tab is drawn *above* the space it was
+// handed — over the staff in a window short enough, or under the header in a
+// tab-only one. Overflowing downwards is ugly; overflowing upwards is two
+// readings on top of each other.
+func fitStrings(top, bottom float64) (spacing, first float64) {
+	spacing = (bottom - top) / 5
 	switch {
 	case spacing > maxStringSpacing:
 		spacing = maxStringSpacing
 	case spacing < minStringSpacing:
 		spacing = minStringSpacing
 	}
-	l.TopString = top + ((bottom-top)-spacing*5)/2
-	l.StringSpacing = spacing
-	return l
+	first = top + ((bottom-top)-spacing*5)/2
+	if first < top {
+		first = top
+	}
+	return spacing, first
 }

@@ -33,6 +33,16 @@ const (
 // menuColumn lays a stack of buttons down the middle of whatever size the
 // window happens to be. A tiling desktop hands this a tall half-screen without
 // being asked, so nothing here is a fixed coordinate.
+// menuTop and menuFoot are the space the column may not use: the heading above
+// it and the input meter below.
+const (
+	menuTop     = 110.0
+	menuFoot    = 56.0
+	menuPitch   = 72.0
+	menuMinRow  = 34.0
+	menuNoteGap = 17.0
+)
+
 func (a *app) menuColumn(count int) (x, w, top, pitch float64) {
 	w = float64(a.width) * 0.62
 	if w > 520 {
@@ -43,15 +53,36 @@ func (a *app) menuColumn(count int) (x, w, top, pitch float64) {
 	}
 	x = (float64(a.width) - w) / 2
 
-	// Room for a button and the line of explanation under it, which is drawn
-	// after every button rather than between them: a note printed before the
-	// next button is a note the next button paints over.
-	pitch = 72
-	top = float64(a.height)*0.30 - float64(count)*pitch/2
-	if min := 110.0; top < min {
-		top = min
+	// The pitch is divided out of the room available rather than fixed. A
+	// fixed one ran the last two choices off the bottom of a short window —
+	// and dropped the input meter on top of a button on the way, because the
+	// footer was clamped to the window's edge instead of following the column.
+	room := float64(a.height) - menuTop - menuFoot
+	pitch = room / float64(count)
+	switch {
+	case pitch > menuPitch:
+		pitch = menuPitch
+	case pitch < menuMinRow+4:
+		pitch = menuMinRow + 4
+	}
+	top = menuTop + (room-pitch*float64(count))/2
+	if top < menuTop {
+		top = menuTop
 	}
 	return x, w, top, pitch
+}
+
+// menuRowHeight is how tall a button is, leaving the rest of the pitch for the
+// line of explanation under it when there is room for one.
+func menuRowHeight(pitch float64) float64 {
+	h := pitch - 24
+	if h > 48 {
+		h = 48
+	}
+	if h < menuMinRow {
+		h = menuMinRow
+	}
+	return h
 }
 
 // ask puts a question up. A question that always did the same thing would only
@@ -154,15 +185,16 @@ var titleRows = []titleRow{
 	},
 	{
 		label: "QUIT", key: "6",
-		do: func(a *app) { a.quitting = true },
+		do: func(a *app) { a.confirmQuit() },
 	},
 }
 
 func (a *app) titleButtons() []button {
 	x, w, top, pitch := a.menuColumn(len(titleRows))
+	h := menuRowHeight(pitch)
 	out := make([]button, 0, len(titleRows))
 	for i, r := range titleRows {
-		b := button{x: x, y: top + float64(i)*pitch, w: w, h: 48, label: r.label, key: r.key}
+		b := button{x: x, y: top + float64(i)*pitch, w: w, h: h, label: r.label, key: r.key}
 		if r.off != nil {
 			b.off = r.off(a)
 		}
@@ -195,7 +227,7 @@ func pickedRow(buttons []button) int {
 
 func (a *app) updateTitle() {
 	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
-		a.quitting = true
+		a.confirmQuit()
 		return
 	}
 	if i := pickedRow(a.titleButtons()); i >= 0 {
@@ -206,18 +238,21 @@ func (a *app) updateTitle() {
 func (a *app) drawTitle(screen *ebiten.Image) {
 	screen.Fill(menuFace)
 	drawHeading(screen, "RIFFHERO", 40, 40)
-	drawDim(screen, "guitar practice — plug in, play, see what landed", 40, 76)
+	drawDim(screen, "guitar practice: plug in, play, see what landed", 40, 76)
 
 	buttons := a.titleButtons()
 	for _, b := range buttons {
 		b.draw(screen)
 	}
-	for i, b := range buttons {
-		if titleRows[i].note == nil {
-			continue
-		}
-		if note := titleRows[i].note(a); note != "" {
-			drawDim(screen, clip(note, int(b.w/glyphW)), int(b.x)+2, int(b.y+b.h)+4)
+	_, _, _, pitch := a.menuColumn(len(titleRows))
+	if pitch-menuRowHeight(pitch) >= menuNoteGap {
+		for i, b := range buttons {
+			if titleRows[i].note == nil {
+				continue
+			}
+			if note := titleRows[i].note(a); note != "" {
+				drawDim(screen, clip(note, int(b.w/glyphW)), int(b.x)+2, int(b.y+b.h)+4)
+			}
 		}
 	}
 
@@ -231,16 +266,29 @@ func (a *app) drawTitleFooter(screen *ebiten.Image, buttons []button) {
 		y -= lineH
 	}
 
+	// Below the column, not clamped to the window edge: clamping put the meter
+	// inside a button on any window short enough for the column to reach the
+	// bottom.
 	last := buttons[len(buttons)-1]
-	y = int(last.y+last.h) + 26
+	y = int(last.y+last.h) + 18
 	if y > a.height-40 {
-		y = a.height - 40
+		return
 	}
 	if a.det != nil {
 		drawDim(screen, "input", 40, y)
 		drawMeter(screen, 90, float64(y)+3, 140, 7, ui.MeterLevel(a.det.Level()), menuGood)
 		drawDim(screen, fmt.Sprintf("%5.1f dB", a.det.Level()), 244, y)
+		y += lineH
 	}
+	if a.noticeTicks > 0 && y <= a.height-40 {
+		drawTinted(screen, a.notice, 40, y, menuAccent)
+	}
+}
+
+// confirmQuit asks first. ESC is the key somebody presses on the way out of a
+// menu, and on this screen it was the key that closed the app.
+func (a *app) confirmQuit() {
+	a.ask("quit RiffHero?", func() { a.quitting = true }, a.openTitle)
 }
 
 // startPractice leaves the menus and puts the playhead at the top of whatever
