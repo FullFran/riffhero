@@ -633,11 +633,22 @@ func (a *app) drawDevices(screen *ebiten.Image) {
 // drawInputMeters shows each socket separately, because that is the only way
 // to find out which one the guitar is in without unplugging things: play, and
 // watch which bar moves.
+// drawInputMeters shows each socket separately, because that is the only way
+// to find out which one the guitar is in without unplugging things: play, and
+// watch which bar moves.
+//
+// It sits directly under the list, and deviceCapacity reserves the room for
+// it. Anchoring it to the bottom of the window instead put its last line
+// under the back button on a normal-sized screen.
 func (a *app) drawInputMeters(screen *ebiten.Image, rows int) {
 	if a.engine == nil {
 		return
 	}
 	peaks := a.engine.InputPeaks()
+
+	// Only the inputs the device actually has. A one-input interface would
+	// otherwise show a second meter pinned at silence forever, on the one
+	// screen whose whole job is telling the sockets apart.
 	channels := a.engine.InputChannels()
 	if channels > len(peaks) {
 		channels = len(peaks)
@@ -646,38 +657,33 @@ func (a *app) drawInputMeters(screen *ebiten.Image, rows int) {
 		channels = 1
 	}
 
-	// Anchored to the bottom rather than to the list, so a long device list
-	// cannot push the meters under the back button — and the whole block is
-	// four lines whatever happens.
-	y := a.height - 62 - 22*channels - 28
-	if top := 122 + rows*browseRowHeight + 20; y < top {
-		y = top
+	y := 130 + rows*browseRowHeight
+	if limit := a.height - 90 - 22*channels; y > limit {
+		y = limit
 	}
-	if y > a.height-62-22*channels-28 {
-		return // no room; the list is what matters
+	if y < 130 {
+		return
 	}
 
 	drawDim(screen, "play something and watch which one moves", 40, y)
+	drawTinted(screen, "listening to the "+a.channel.String()+" input, C to change",
+		a.width-40-int(textWidth("listening to the "+a.channel.String()+" input, C to change")), y, menuAccent)
 	y += 24
 
-	// Only the inputs the device actually has. A one-input interface would
-	// otherwise show a second meter pinned at silence forever, on the one
-	// screen whose whole job is telling the sockets apart.
+	width := float64(a.width) - 260
+	if width < 60 {
+		width = 60
+	}
 	for i := 0; i < channels; i++ {
 		ink := menuGood
 		if a.channel == audio.ChannelLeft && i == 1 || a.channel == audio.ChannelRight && i == 0 {
 			ink = menuDim // not the one being listened to
 		}
 		drawDim(screen, fmt.Sprintf("input %d", i+1), 40, y)
-		width := float64(a.width) - 260
-		if width < 60 {
-			width = 60
-		}
 		drawMeter(screen, 110, float64(y)+3, width, 8, dbFill(peak(peaks, i)), ink)
 		drawTinted(screen, decibels(peak(peaks, i)), a.width-130, y, menuDim)
 		y += 22
 	}
-	drawDim(screen, "listening to: "+a.channel.String()+"    C to change", 40, y+4)
 }
 
 func peak(peaks [2]float64, i int) float64 {

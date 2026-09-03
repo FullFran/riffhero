@@ -66,6 +66,7 @@ func (a *app) drawPractice(screen *ebiten.Image) {
 		a.drawStrings(screen)
 		a.drawNotes(screen, now)
 	}
+	a.drawBarNumbers(screen, now)
 	a.drawPlayhead(screen, now)
 	a.drawHUD(screen)
 
@@ -100,21 +101,28 @@ func (a *app) drawGrid(screen *ebiten.Image, now practice.Frame) {
 		}
 		x := float32(a.layout.NoteX(now, bar.Start))
 		vector.StrokeLine(screen, x, top, x, bottom, 1, colorBarLine, false)
-		a.drawBarNumber(screen, bar.Number, x)
 	}
 }
 
-// drawBarNumber puts a bar's number above everything on screen rather than
-// above the tab. Above the tab meant on top of the staff's low notes, which in
-// this music is the open low E on the downbeat — the number and the note in
-// the same place, every bar.
-func (a *app) drawBarNumber(screen *ebiten.Image, number int, x float32) {
+// drawBarNumbers labels the bars above everything on screen, once, whichever
+// readings are showing.
+//
+// Above the tab is where they used to go, which on the staff meant on top of
+// its low notes — and in this music that is the open low E on the downbeat,
+// the number and the note in the same place every bar.
+func (a *app) drawBarNumbers(screen *ebiten.Image, now practice.Frame) {
 	top, _ := a.readingBand()
 	y := int(top) - lineH
 	if y < ui.HeaderHeight+2 {
 		y = ui.HeaderHeight + 2
 	}
-	drawTinted(screen, fmt.Sprintf("%d", number), int(x)+3, y, menuDim)
+	for _, bar := range a.layout.VisibleBars(now, a.song.Grid) {
+		x := a.layout.NoteX(now, bar.Start)
+		if x < gutterX {
+			continue
+		}
+		drawTinted(screen, fmt.Sprintf("%d", bar.Number), int(x)+3, y, menuDim)
+	}
 }
 
 func (a *app) drawStrings(screen *ebiten.Image) {
