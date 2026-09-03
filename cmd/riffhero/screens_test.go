@@ -1,10 +1,13 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/FullFran/riffhero/internal/config"
+	"github.com/FullFran/riffhero/internal/library"
 	"github.com/FullFran/riffhero/internal/practice"
 	"github.com/FullFran/riffhero/internal/ui"
 )
@@ -167,6 +170,185 @@ func TestSpellingFor(t *testing.T) {
 	for _, name := range []string{"sharps", "", "nonsense"} {
 		if got := spellingFor(name); got != ui.Sharps {
 			t.Fatalf("%q gave %v", name, got)
+		}
+	}
+}
+
+// browserFixture is an app with just enough filled in to build a listing.
+func browserFixture(t *testing.T, dir string, kind library.Kind) *app {
+	t.Helper()
+	a := &app{width: 800, height: 600}
+	a.browse.kind = kind
+	a.browseTo(dir)
+	return a
+}
+
+func TestBrowserPutsUpFirstThenShortcutsThenFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.gp", "b.mid"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	a := browserFixture(t, dir, library.Score)
+	rows := a.browseRows()
+	if len(rows) == 0 || rows[0].label != ".." {
+		t.Fatalf("first row is %+v, want up", rows[0])
+	}
+
+	// Directories before files, and every file openable.
+	var sawDir, sawFile bool
+	for _, r := range rows[1:] {
+		if r.dir != "" {
+			if sawFile {
+				t.Fatalf("a directory came after a file: %v", rows)
+			}
+			sawDir = true
+			continue
+		}
+		sawFile = true
+	}
+	if !sawDir || !sawFile {
+		t.Fatalf("expected both kinds: %v", rows)
+	}
+}
+
+func TestBrowserCursorStaysInRangeAndOnScreen(t *testing.T) {
+	// The cursor drives what ENTER opens, so it must never point past the end
+	// of a list — and it has to stay visible, or a long directory cannot be
+	// walked with the keyboard at all.
+	a := &app{width: 800, height: 600}
+	count := 100
+
+	for i := 0; i < 200; i++ {
+		a.browse.cursor++
+		if a.browse.cursor >= count {
+			a.browse.cursor = count - 1
+		}
+	}
+	if a.browse.cursor != count-1 {
+		t.Fatalf("cursor %d", a.browse.cursor)
+	}
+
+	// And the scroll rule keeps it inside the visible window.
+	a.browse.scroll = 0
+	capacity := a.browseCapacity()
+	a.browse.cursor = capacity + 5
+	if last := a.browse.scroll + capacity - 1; a.browse.cursor > last {
+		a.browse.scroll = a.browse.cursor - capacity + 1
+	}
+	if a.browse.cursor < a.browse.scroll || a.browse.cursor >= a.browse.scroll+capacity {
+		t.Fatalf("cursor %d is outside the window %d..%d", a.browse.cursor, a.browse.scroll, a.browse.scroll+capacity)
+	}
+}
+
+func TestBrowserSurvivesADirectoryItCannotRead(t *testing.T) {
+	a := &app{width: 800, height: 600}
+	a.browseTo(filepath.Join(t.TempDir(), "nowhere"))
+	if a.browse.err == "" {
+		t.Fatal("no error was reported")
+	}
+	// And it must still be able to draw: rows over a listing that never loaded.
+	if got := a.browseRows(); len(got) != 0 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestSettingRowsAndButtonsAgree(t *testing.T) {
+	// The update indexes the buttons by the row's position, so a mismatch
+	// would act on the wrong setting.
+	a := &app{width: 800, height: 600, song: &practice.Song{Tracks: []practice.Track{{Name: "Guitar"}}}}
+	a.head = practice.NewTransport(practice.Clock{SampleRate: 48000}, 1000)
+	a.runner = practice.NewRunner(a.head, practice.NewScriptedDetector(nil), practice.RunnerConfig{})
+
+	buttons := a.settingButtons()
+	if len(buttons) != len(settingRows) {
+		t.Fatalf("%d buttons for %d rows", len(buttons), len(settingRows))
+	}
+	for i := range settingRows {
+		x, y, w := a.settingGeometry(i)
+		if buttons[i].x != x || buttons[i].y != y || buttons[i].w != w {
+			t.Fatalf("row %d: button at %v,%v,%v but geometry says %v,%v,%v",
+				i, buttons[i].x, buttons[i].y, buttons[i].w, x, y, w)
+		}
+	}
+}
+
+func TestSettingsFitEveryWindow(t *testing.T) {
+	// Whatever the window, every visible row is inside it and none of them
+	// overlaps the next. A window too small for the lot scrolls rather than
+	// hiding the last few: a setting nobody can reach does not exist.
+	for _, size := range [][2]int{{1280, 720}, {677, 723}, {500, 380}, {320, 240}, {1920, 1080}} {
+		a := &app{width: size[0], height: size[1]}
+		if a.settingPitch() < settingRowH {
+			t.Fatalf("%v: rows overlap at pitch %v", size, a.settingPitch())
+		}
+		for i := range settingRows {
+			if !a.settingVisible(i) {
+				continue
+			}
+			_, y, _ := a.settingGeometry(i)
+			if y < settingsTop-1 || y+settingRowH > float64(size[1])-settingsBottom+1 {
+				t.Fatalf("%v: visible row %d runs from %v to %v", size, i, y, y+settingRowH)
+			}
+		}
+	}
+}
+
+func TestEverySettingCanBeScrolledTo(t *testing.T) {
+	a := &app{width: 500, height: 380}
+	for i := range settingRows {
+		a.revealSetting(i)
+		if !a.settingVisible(i) {
+			t.Fatalf("row %d cannot be brought on screen", i)
+		}
+	}
+	// And the list cannot be scrolled past either end.
+	a.scrollSettings(-100)
+	if a.settings.scroll != 0 {
+		t.Fatalf("scrolled above the top: %d", a.settings.scroll)
+	}
+	a.scrollSettings(100)
+	if want := len(settingRows) - a.settingCapacity(); a.settings.scroll != want {
+		t.Fatalf("scrolled to %d, want %d", a.settings.scroll, want)
+	}
+}
+
+func TestEverySettingRowIsComplete(t *testing.T) {
+	// A row with no value would draw an empty right-hand side; a stepper with
+	// no less or more would look adjustable and do nothing.
+	for i, r := range settingRows {
+		if r.label == "" {
+			t.Fatalf("row %d has no label", i)
+		}
+		switch r.kind {
+		case settingStep:
+			if r.value == nil || r.less == nil || r.more == nil {
+				t.Fatalf("stepper %q is missing a value or an end", r.label)
+			}
+		case settingToggle:
+			if r.on == nil || r.do == nil {
+				t.Fatalf("toggle %q is missing its state or its action", r.label)
+			}
+		default:
+			if r.value == nil || r.do == nil {
+				t.Fatalf("action %q is missing a value or an action", r.label)
+			}
+		}
+	}
+}
+
+func TestEveryTitleRowDoesSomething(t *testing.T) {
+	for i, r := range titleRows {
+		if r.label == "" || r.do == nil {
+			t.Fatalf("title row %d is incomplete: %+v", i, r)
+		}
+		if r.key == "" {
+			t.Fatalf("title row %q has no key; the mouse would be the only way to it", r.label)
 		}
 	}
 }
