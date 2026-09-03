@@ -116,3 +116,47 @@ func TestFormatSeconds(t *testing.T) {
 		}
 	}
 }
+
+func TestReplayingDetectorPlaysTheSectionAgainEveryLap(t *testing.T) {
+	// A ScriptedDetector emits each detection once and then goes quiet, so the
+	// second lap of a region scored nothing — not because the scoring was
+	// wrong but because nobody was playing. The demo has to repeat the section
+	// or it shows the opposite of what it is for.
+	events := []practice.DetectedNote{
+		{Onset: 100, MIDI: 40, Confidence: 1},
+		{Onset: 200, MIDI: 45, Confidence: 1},
+		{Onset: 300, MIDI: 50, Confidence: 1},
+	}
+	d := newReplayingDetector(events)
+
+	first := len(d.Poll(150)) + len(d.Poll(400))
+	if first != 3 {
+		t.Fatalf("first pass emitted %d detections, want 3", first)
+	}
+	if got := d.Poll(400); len(got) != 0 {
+		t.Fatalf("a settled playhead emitted %d more", len(got))
+	}
+
+	// The playhead wraps back to the start of the region.
+	second := len(d.Poll(50)) + len(d.Poll(400))
+	if second != 3 {
+		t.Fatalf("second lap emitted %d detections, want 3", second)
+	}
+}
+
+func TestReplayingDetectorDiscardsWhatIsBehindASeek(t *testing.T) {
+	// Jumping into the middle of a region must not dump every earlier
+	// detection at once; they belong to music that was skipped.
+	events := []practice.DetectedNote{
+		{Onset: 100, MIDI: 40}, {Onset: 200, MIDI: 45}, {Onset: 5000, MIDI: 50},
+	}
+	d := newReplayingDetector(events)
+	d.Poll(6000) // play the lot
+
+	if got := d.Poll(4000); len(got) != 0 {
+		t.Fatalf("seeking back to 4000 replayed %d detections from before it", len(got))
+	}
+	if got := d.Poll(6000); len(got) != 1 || got[0].MIDI != 50 {
+		t.Fatalf("got %+v, want only the note after the seek", got)
+	}
+}

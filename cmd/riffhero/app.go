@@ -217,7 +217,38 @@ func (a *app) detector() practice.Detector {
 	if a.det != nil {
 		return a.det
 	}
-	return practice.NewScriptedDetector(practice.Perform(a.notes(), scriptedPerformance(a.clock, len(a.notes()))))
+	return newReplayingDetector(practice.Perform(a.notes(), scriptedPerformance(a.clock, len(a.notes()))))
+}
+
+// replayingDetector is the stand-in guitarist, playing the section again every
+// time round the loop.
+//
+// A ScriptedDetector emits each detection once and then goes quiet, so the
+// second lap of an A-B region scored nothing — not because the scoring was
+// wrong but because nobody was playing. A real player repeats the section,
+// and the demo has to as well or it shows the opposite of what it is for.
+type replayingDetector struct {
+	inner *practice.ScriptedDetector
+	last  practice.Frame
+	begun bool
+}
+
+func newReplayingDetector(events []practice.DetectedNote) *replayingDetector {
+	return &replayingDetector{inner: practice.NewScriptedDetector(events)}
+}
+
+func (d *replayingDetector) Poll(upTo practice.Frame) []practice.DetectedNote {
+	// The playhead going backwards is a wrap or a seek — the same signal the
+	// audio engine uses. Either way the performance starts again from there,
+	// with everything before it thrown away rather than dumped at once.
+	if d.begun && upTo < d.last {
+		d.inner.Reset()
+		if upTo > 0 {
+			d.inner.Poll(upTo - 1)
+		}
+	}
+	d.last, d.begun = upTo, true
+	return d.inner.Poll(upTo)
 }
 
 func (a *app) buildRunner() {
