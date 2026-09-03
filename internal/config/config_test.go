@@ -159,3 +159,27 @@ func TestPathFollowsXDG(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+func TestAMutedBackingStaysMuted(t *testing.T) {
+	// `omitempty` dropped a zero volume, so LoadFrom started from the default
+	// and the backing came back at full level. Turning it all the way down is
+	// a decision, not an omission.
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Default()
+	cfg.Volume = 0
+	cfg.Monitor = 0
+	if err := cfg.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Volume != 0 {
+		t.Fatalf("volume came back as %v", got.Volume)
+	}
+	if got.Monitor != 0 {
+		t.Fatalf("monitor came back as %v", got.Monitor)
+	}
+}

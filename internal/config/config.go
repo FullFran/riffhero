@@ -39,9 +39,13 @@ type Config struct {
 	LatencySampleRate int   `json:"latency_sample_rate,omitempty"`
 
 	// Speed, Volume and Monitor are the practice settings worth remembering.
-	Speed   float64 `json:"speed,omitempty"`
-	Volume  float64 `json:"volume,omitempty"`
-	Monitor float64 `json:"monitor,omitempty"`
+	//
+	// None of them is omitempty, and Volume is why: turning the backing all
+	// the way down is a decision, and omitempty drops the field, so the next
+	// run started from the default and came back at full volume.
+	Speed   float64 `json:"speed"`
+	Volume  float64 `json:"volume"`
+	Monitor float64 `json:"monitor"`
 
 	// Tuning names the tuning to assume for scores that do not carry one.
 	Tuning string `json:"tuning,omitempty"`

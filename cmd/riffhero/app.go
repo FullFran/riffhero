@@ -95,6 +95,9 @@ func build(o options, cfg config.Config) (*app, error) {
 
 	a.buildRunner()
 	if err := a.applyInitialSettings(); err != nil {
+		// The stream is already open by this point, and the caller only gets a
+		// nil app to close.
+		a.Close()
 		return nil, err
 	}
 	return a, nil

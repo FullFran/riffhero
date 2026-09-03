@@ -85,9 +85,9 @@ func (a *app) handleSeek() {
 	case inpututil.IsKeyJustPressed(ebiten.KeyArrowRight):
 		a.seekBars(1)
 	case inpututil.IsKeyJustPressed(ebiten.KeyHome):
-		a.head.Seek(0)
+		a.runner.Seek(0)
 	case inpututil.IsKeyJustPressed(ebiten.KeyEnd):
-		a.head.Seek(a.head.End())
+		a.runner.Seek(a.head.End())
 	}
 }
 
@@ -101,22 +101,22 @@ func (a *app) seekBars(delta int) {
 		// Nudging back from just inside a bar should go to that bar's start
 		// first, the way a DAW does, rather than skipping a whole bar.
 		if delta < 0 && pos > grid[i].Start+a.clock.Frames(0.2) {
-			a.head.Seek(grid[i].Start)
+			a.runner.Seek(grid[i].Start)
 			return
 		}
 		target := i + delta
 		if target < 0 {
-			a.head.Seek(0)
+			a.runner.Seek(0)
 			return
 		}
 		if target >= len(grid) {
-			a.head.Seek(a.head.End())
+			a.runner.Seek(a.head.End())
 			return
 		}
-		a.head.Seek(grid[target].Start)
+		a.runner.Seek(grid[target].Start)
 		return
 	}
-	a.head.Seek(pos + practice.Frame(delta)*a.clock.Frames(2))
+	a.runner.Seek(pos + practice.Frame(delta)*a.clock.Frames(2))
 }
 
 func (a *app) handleLoop() {
