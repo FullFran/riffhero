@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/FullFran/riffhero/internal/practice"
@@ -43,6 +44,13 @@ func TestRoundTrip(t *testing.T) {
 		Volume:            0.6,
 		Monitor:           0.2,
 		Tuning:            "drop-d",
+		Notation:          NotationBoth,
+		Spelling:          SpellingFlats,
+		Score:             "/music/blackbird.musicxml",
+		Backing:           "/music/blackbird.ogg",
+		ScoreDir:          "/music",
+		Track:             2,
+		Progressive:       true,
 	}
 	if err := want.SaveTo(path); err != nil {
 		t.Fatalf("saving: %v", err)
@@ -157,5 +165,178 @@ func TestPathFollowsXDG(t *testing.T) {
 	}
 	if want := "/tmp/xdg-example/riffhero/config.json"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestAMutedBackingStaysMuted(t *testing.T) {
+	// `omitempty` dropped a zero volume, so LoadFrom started from the default
+	// and the backing came back at full level. Turning it all the way down is
+	// a decision, not an omission.
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Default()
+	cfg.Volume = 0
+	cfg.Monitor = 0
+	if err := cfg.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Volume != 0 {
+		t.Fatalf("volume came back as %v", got.Volume)
+	}
+	if got.Monitor != 0 {
+		t.Fatalf("monitor came back as %v", got.Monitor)
+	}
+}
+
+func TestTheFirstTrackAndAProgressiveRuleTurnedOffAreWrittenDown(t *testing.T) {
+	// Same trap as the muted backing: track 0 is the first track and false is
+	// the progressive rule switched off, so omitempty would drop exactly the
+	// answers a player is most likely to have given. Today Default() agrees
+	// with both zero values and the bug would hide; the file is checked
+	// directly so it cannot wake up the day a default changes.
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Default()
+	cfg.Track = 0
+	cfg.Progressive = false
+	if err := cfg.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"track"`, `"progressive"`} {
+		if !strings.Contains(string(data), key) {
+			t.Errorf("%s is missing from the file:\n%s", key, data)
+		}
+	}
+
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Track != 0 {
+		t.Fatalf("track came back as %d", got.Track)
+	}
+	if got.Progressive {
+		t.Fatal("the progressive rule came back on")
+	}
+}
+
+func TestLoadRepairsAHandEditedNotationSpellingAndTrack(t *testing.T) {
+	// Anything that is not one of the readings would leave the practice view
+	// drawing neither tab nor stave, and a negative index would take the score
+	// down with it, so a nonsense value is replaced rather than kept.
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{"notation": "hieroglyphs", "spelling": "quarter-tones", "track": -4}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notation != DefaultNotation {
+		t.Fatalf("notation %q, want %q", cfg.Notation, DefaultNotation)
+	}
+	if cfg.Spelling != SpellingSharps {
+		t.Fatalf("spelling %q, want %q", cfg.Spelling, SpellingSharps)
+	}
+	if cfg.Track != 0 {
+		t.Fatalf("track %d, want 0", cfg.Track)
+	}
+}
+
+func TestAConfigWrittenBeforeTheSettingsScreenLoadsToTheDefaults(t *testing.T) {
+	// Every new key is absent from a file the previous version wrote. Loading
+	// starts from Default() precisely so those keys come back as a first run
+	// would have them, instead of as the empty string the decoder leaves.
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{
+	  "input_device": "Scarlett",
+	  "backend": "pulseaudio",
+	  "latency_frames": 1234,
+	  "latency_sample_rate": 48000,
+	  "speed": 0.75,
+	  "volume": 0.6,
+	  "monitor": 0.2,
+	  "tuning": "drop-d"
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := Default()
+	want.InputDevice = "Scarlett"
+	want.Backend = "pulseaudio"
+	want.LatencyFrames = 1234
+	want.LatencySampleRate = 48000
+	want.Speed = 0.75
+	want.Volume = 0.6
+	want.Monitor = 0.2
+	want.Tuning = "drop-d"
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if got.Notation != NotationTab || got.Spelling != SpellingSharps {
+		t.Fatalf("an old file gave notation %q and spelling %q", got.Notation, got.Spelling)
+	}
+}
+
+func TestNotationValidRejectsAnythingTheViewCannotDraw(t *testing.T) {
+	for _, n := range []Notation{NotationTab, NotationStaff, NotationBoth} {
+		if !n.Valid() {
+			t.Errorf("%q is a reading the view draws", n)
+		}
+	}
+	for _, n := range []Notation{"", "tabs", "Tab", "hieroglyphs"} {
+		if n.Valid() {
+			t.Errorf("%q was accepted as a reading", n)
+		}
+	}
+}
+
+func TestNotationNextCyclesThroughTheThreeAndBack(t *testing.T) {
+	// One key toggles the reading, so the cycle has to close: three presses
+	// from tab must land on tab again or the key becomes a dead end.
+	want := []Notation{NotationStaff, NotationBoth, NotationTab}
+	got := NotationTab
+	for i, expect := range want {
+		got = got.Next()
+		if got != expect {
+			t.Fatalf("press %d gave %q, want %q", i+1, got, expect)
+		}
+	}
+
+	// A value from a hand-edited file reads as tab everywhere else, so the
+	// first press must move it on from tab rather than to it.
+	if got := Notation("hieroglyphs").Next(); got != NotationStaff {
+		t.Fatalf("an unknown reading advanced to %q, want %q", got, NotationStaff)
+	}
+}
+
+func TestNotationLabelNamesTheReading(t *testing.T) {
+	cases := map[Notation]string{
+		NotationTab:   "tablature",
+		NotationStaff: "notation",
+		NotationBoth:  "both",
+		"":            "tablature",
+		"hieroglyphs": "tablature",
+	}
+	for n, want := range cases {
+		if got := n.Label(); got != want {
+			t.Errorf("%q is labelled %q, want %q", n, got, want)
+		}
 	}
 }

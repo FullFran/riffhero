@@ -32,6 +32,52 @@ const outRingFrames = 4096
 // pieces that fit them.
 const chunkFrames = 4096
 
+// InputChannel says which of a multi-channel input the guitar is on.
+//
+// It matters on any interface with more than one input, which is most of
+// them. A two-input box puts the guitar on input 1 and leaves input 2 open,
+// and averaging the two halves the guitar's level while mixing in whatever
+// the empty input is picking up. Averaging is right for a single microphone
+// and wrong for an instrument in socket one, and nothing in the audio can
+// tell the two apart — so it is asked rather than guessed.
+type InputChannel uint8
+
+const (
+	// ChannelMix averages every input, which is what a mono source recorded
+	// onto both channels wants.
+	ChannelMix InputChannel = iota
+	ChannelLeft
+	ChannelRight
+)
+
+func (c InputChannel) String() string {
+	switch c {
+	case ChannelLeft:
+		return "left"
+	case ChannelRight:
+		return "right"
+	default:
+		return "mix"
+	}
+}
+
+// Next cycles the three, so one control covers them.
+func (c InputChannel) Next() InputChannel {
+	switch c {
+	case ChannelMix:
+		return ChannelLeft
+	case ChannelLeft:
+		return ChannelRight
+	default:
+		return ChannelMix
+	}
+}
+
+// maxMeteredChannels is how many input levels are reported separately. Two
+// covers the interfaces this is for; anything past that is folded into the
+// mix and not metered.
+const maxMeteredChannels = 2
+
 // Config describes the stream to open.
 type Config struct {
 	SampleRate   int
@@ -51,10 +97,15 @@ type Config struct {
 	// renders silence, which still drives the timeline.
 	Backing []float32
 
+	// Channel picks which input the guitar is on.
+	Channel InputChannel
+
 	// Volume is the backing level and Monitor is how much of the captured
-	// guitar is mixed into the output, both 0..1. Monitoring is off by default:
-	// with an amp in the room it is an echo, and it is only wanted when the
-	// guitar goes straight into an interface.
+	// guitar is mixed into the output, both 0..1. Zero means silence for both,
+	// and is a setting rather than an omission — the caller states what it
+	// wants. Monitoring is off by default: with an amp in the room it is an
+	// echo, and it is only wanted when the guitar goes straight into an
+	// interface.
 	Volume  float64
 	Monitor float64
 }
@@ -65,9 +116,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.PeriodFrames <= 0 {
 		c.PeriodFrames = DefaultPeriodFrames
-	}
-	if c.Volume == 0 {
-		c.Volume = 1
 	}
 	return c
 }
@@ -89,10 +137,17 @@ type Engine struct {
 	rend   *renderer
 
 	stop chan struct{}
-	done chan struct{}
 
-	volume  atomic.Uint64
-	monitor atomic.Uint64
+	volume        atomic.Uint64
+	monitor       atomic.Uint64
+	channel       atomic.Uint32
+	inputChannels atomic.Uint32
+
+	// peaks is the loudest sample each input carried during the last
+	// callback. It is what lets the device screen show which socket the guitar
+	// is actually in, rather than leaving somebody to work it out by playing
+	// and watching one number.
+	peaks [maxMeteredChannels]atomic.Uint64
 
 	// streamPos counts capture frames handed to the detector since the stream
 	// opened. It is the coordinate the detector reports notes in and the key
@@ -129,12 +184,12 @@ func Open(host *Host, cfg Config, player *Player, det *dsp.Detector) (*Engine, e
 		ring:   newOutRing(outRingFrames),
 		tmap:   NewTimeMap(256),
 		stop:   make(chan struct{}),
-		done:   make(chan struct{}),
 		mono:   make([]float32, chunkFrames),
 		stereo: make([]float32, chunkFrames*2),
 	}
 	e.volume.Store(math.Float64bits(cfg.Volume))
 	e.monitor.Store(math.Float64bits(cfg.Monitor))
+	e.channel.Store(uint32(cfg.Channel))
 	e.rend = newRenderer(player, e.ring, cfg.Backing, cfg.SampleRate, &e.volume)
 
 	if det != nil {
@@ -164,24 +219,7 @@ func (e *Engine) deviceConfig() (malgo.DeviceConfig, func(), error) {
 		kind = malgo.Playback
 	}
 
-	cfg := malgo.DefaultDeviceConfig(kind)
-	cfg.SampleRate = uint32(e.cfg.SampleRate)
-	cfg.PeriodSizeInFrames = uint32(e.cfg.PeriodFrames)
-	cfg.PerformanceProfile = malgo.LowLatency
-
-	// The format is pinned and the channel counts deliberately are not.
-	//
-	// Asking for one capture channel seems obviously right — the detector is
-	// monophonic — and it is what JACK refuses outright: its ports are the
-	// system's, and a duplex device that does not match them fails to
-	// initialize. Worse, a failed ma_device_init leaves the process unable to
-	// create another context at all, so there is no second attempt to fall
-	// back to. Taking whatever the device has and folding it down in the
-	// callback costs a handful of adds and works on every backend.
-	cfg.Capture.Format = malgo.FormatF32
-	cfg.Capture.Channels = 0
-	cfg.Playback.Format = malgo.FormatF32
-	cfg.Playback.Channels = 0
+	cfg := deviceConfigFor(kind, e.cfg.SampleRate, e.cfg.PeriodFrames)
 
 	var in, out *Device
 	if e.cfg.Capture {
@@ -190,7 +228,37 @@ func (e *Engine) deviceConfig() (malgo.DeviceConfig, func(), error) {
 	if e.cfg.Playback {
 		out = e.cfg.Output
 	}
-	return cfg, pinDevices(&cfg, in, out), nil
+	// Two statements rather than one: the order of a function call against a
+	// plain operand read inside the same expression is unspecified, and this
+	// call mutates the value being returned beside it. It works on gc today
+	// and there is no reason to depend on that.
+	release := pinDevices(&cfg, in, out)
+	return cfg, release, nil
+}
+
+// deviceConfigFor is the configuration RiffHero asks every device for. It is
+// shared by the engine and the calibrator, because the two diverging is
+// exactly how the calibrator kept a fatal channel count after the engine's was
+// fixed.
+//
+// The format is pinned and the channel counts deliberately are not. Asking for
+// one capture channel seems obviously right — the detector is monophonic — and
+// it is what JACK refuses outright: its ports are the system's, and a duplex
+// device that does not match them fails to initialize. Worse, a failed
+// ma_device_init leaves the process unable to create another context at all,
+// so there is no second attempt to fall back to. Taking whatever the device
+// has and folding it down in the callback costs a handful of adds and works on
+// every backend.
+func deviceConfigFor(kind malgo.DeviceType, sampleRate, periodFrames int) malgo.DeviceConfig {
+	cfg := malgo.DefaultDeviceConfig(kind)
+	cfg.SampleRate = uint32(sampleRate)
+	cfg.PeriodSizeInFrames = uint32(periodFrames)
+	cfg.PerformanceProfile = malgo.LowLatency
+	cfg.Capture.Format = malgo.FormatF32
+	cfg.Capture.Channels = 0
+	cfg.Playback.Format = malgo.FormatF32
+	cfg.Playback.Channels = 0
+	return cfg
 }
 
 // pinDevices points the config at the chosen endpoints and returns the release
@@ -201,17 +269,30 @@ func (e *Engine) deviceConfig() (malgo.DeviceConfig, func(), error) {
 // them onto the C heap instead, which works but leaks: it has no matching
 // free. Pinning is the same thing without the leak, and it is safe because
 // miniaudio copies the ID into the device before ma_device_init returns.
+//
+// The IDs are copied into a bare array first, and that is not tidiness. Go may
+// only hand C a pointer to memory that contains no Go pointers, and the check
+// is made against the whole enclosing object — so pointing at Device.id, in a
+// struct that also holds a Name string, panics with "Go pointer to unpinned Go
+// pointer" the moment a device is chosen by name instead of defaulted. The
+// array holds nothing but bytes.
 func pinDevices(cfg *malgo.DeviceConfig, in, out *Device) func() {
 	pinner := &runtime.Pinner{}
+	ids := new([2]malgo.DeviceID)
+	pinner.Pin(ids)
+
 	if in != nil {
-		pinner.Pin(&in.id)
-		cfg.Capture.DeviceID = unsafe.Pointer(&in.id)
+		ids[0] = in.id
+		cfg.Capture.DeviceID = unsafe.Pointer(&ids[0])
 	}
 	if out != nil {
-		pinner.Pin(&out.id)
-		cfg.Playback.DeviceID = unsafe.Pointer(&out.id)
+		ids[1] = out.id
+		cfg.Playback.DeviceID = unsafe.Pointer(&ids[1])
 	}
-	return pinner.Unpin
+	return func() {
+		runtime.KeepAlive(ids)
+		pinner.Unpin()
+	}
 }
 
 // Start begins the stream and the render goroutine.
@@ -315,6 +396,9 @@ func (e *Engine) onData(outBytes, inBytes []byte, frames uint32) {
 	}
 	inCh := channelsOf(inBytes, n)
 	outCh := channelsOf(outBytes, n)
+	if inCh > 0 {
+		e.inputChannels.Store(uint32(inCh))
+	}
 
 	in := asFloat32(inBytes, n*inCh)
 	out := asFloat32(outBytes, n*outCh)
@@ -337,7 +421,9 @@ func (e *Engine) onData(outBytes, inBytes []byte, frames uint32) {
 
 		mono := e.mono[:size]
 		if inCh > 0 {
-			downmix(mono, in[off*inCh:(off+size)*inCh], inCh)
+			block := in[off*inCh : (off+size)*inCh]
+			pick(mono, block, inCh, InputChannel(e.channel.Load()))
+			e.meter(block, inCh, off == 0)
 			if e.det != nil {
 				e.det.Write(mono)
 			}
@@ -383,9 +469,17 @@ func (e *Engine) onData(outBytes, inBytes []byte, frames uint32) {
 
 	if got > 0 {
 		e.player.observe(last)
+		// Only the frames the ring actually supplied moved the song; anything
+		// after them was silence the callback filled in. Claiming the whole
+		// block advanced linearly would map input captured during an underrun
+		// to a position that was never played.
+		//
 		// songEnd is exclusive: the block covered up to one frame past the
 		// last stamp.
-		e.tmap.Push(streamStart, int64(n), first.pos, last.pos+1, true)
+		e.tmap.Push(streamStart, int64(got), first.pos, last.pos+1, true)
+		if got < n {
+			e.tmap.Push(streamStart+int64(got), int64(n-got), 0, 0, false)
+		}
 		return
 	}
 	e.tmap.Push(streamStart, int64(n), 0, 0, false)
@@ -399,14 +493,24 @@ func channelsOf(buf []byte, frames int) int {
 	return len(buf) / (4 * frames)
 }
 
-// downmix folds an interleaved block to mono. An interface with the guitar on
-// input 1 and nothing on input 2 halves the level rather than losing it, which
-// the gate's floor is well below.
-func downmix(dst, src []float32, channels int) {
-	switch channels {
-	case 1:
+// pick folds an interleaved block down to the one channel the detector wants.
+//
+// Taking a single channel rather than the average is the difference between
+// hearing a guitar and hearing a guitar at half level with the next socket's
+// hum on top of it.
+func pick(dst, src []float32, channels int, which InputChannel) {
+	switch {
+	case channels == 1:
 		copy(dst, src)
-	case 2:
+	case which == ChannelLeft:
+		for i := range dst {
+			dst[i] = src[i*channels]
+		}
+	case which == ChannelRight:
+		for i := range dst {
+			dst[i] = src[i*channels+1]
+		}
+	case channels == 2:
 		for i := range dst {
 			dst[i] = (src[i*2] + src[i*2+1]) * 0.5
 		}
@@ -421,6 +525,61 @@ func downmix(dst, src []float32, channels int) {
 		}
 	}
 }
+
+// meter records the loudest sample on each input. Two multiplications and a
+// comparison per sample, which is what the callback's budget allows.
+func (e *Engine) meter(src []float32, channels int, reset bool) {
+	n := maxMeteredChannels
+	if channels < n {
+		n = channels
+	}
+	for c := 0; c < n; c++ {
+		peak := float32(0)
+		for i := c; i < len(src); i += channels {
+			v := src[i]
+			if v < 0 {
+				v = -v
+			}
+			if v > peak {
+				peak = v
+			}
+		}
+		if !reset {
+			if was := math.Float64frombits(e.peaks[c].Load()); was > float64(peak) {
+				peak = float32(was)
+			}
+		}
+		e.peaks[c].Store(math.Float64bits(float64(peak)))
+	}
+}
+
+// InputPeaks is the loudest sample each input carried during the last
+// callback, one per channel, 0..1.
+func (e *Engine) InputPeaks() [maxMeteredChannels]float64 {
+	var out [maxMeteredChannels]float64
+	for c := range out {
+		out[c] = math.Float64frombits(e.peaks[c].Load())
+	}
+	return out
+}
+
+// InputChannels is how many capture channels the device actually has, as far
+// as the meters are concerned. It is derived from the callback rather than
+// from the config, because the config asked for whatever the device liked.
+func (e *Engine) InputChannels() int {
+	n := int(e.inputChannels.Load())
+	if n > maxMeteredChannels {
+		return maxMeteredChannels
+	}
+	return n
+}
+
+// Channel is the input the detector is listening to.
+func (e *Engine) Channel() InputChannel { return InputChannel(e.channel.Load()) }
+
+// SetChannel switches inputs without reopening the device, so somebody can try
+// each socket while playing.
+func (e *Engine) SetChannel(c InputChannel) { e.channel.Store(uint32(c)) }
 
 // spread writes stereo frames out to however many channels the device has.
 func spread(dst, stereo []float32, channels int) {

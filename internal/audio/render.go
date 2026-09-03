@@ -126,9 +126,18 @@ func (r *renderer) fill() bool {
 
 		switch {
 		case loop.Active() && r.cursor < loop.B:
-			if r.cursor+practice.Frame(in) >= loop.B {
-				in = int(loop.B - r.cursor)
+			remaining := int(loop.B - r.cursor)
+			switch {
+			case remaining <= in:
+				in = remaining
 				wrap = true
+			case remaining-in < loopFadeFrames:
+				// Stop short so the chunk that does wrap is long enough to
+				// hold the whole fade. Otherwise the region's length modulo
+				// the chunk size decides how long the fade gets, and a short
+				// remainder makes the fade open partway down — a step, which
+				// is exactly the click the fade exists to remove.
+				in = remaining - loopFadeFrames
 			}
 		case loop.Active():
 			// The playhead sits past the region; fold it back rather than
@@ -152,8 +161,9 @@ func (r *renderer) fill() bool {
 
 		r.renderChunk(in, speed, wrap)
 		if wrap {
+			// The lap itself is counted where it is heard, not here: this
+			// cursor is a whole output buffer ahead of the device.
 			r.jumpTo(loop.A)
-			r.player.countLap()
 		}
 		worked = true
 	}
@@ -237,6 +247,10 @@ func (r *renderer) readSource(in int, fadeOut bool) {
 		return
 	}
 	g := float32(math.Float64frombits(r.gain.Load()))
+	fadeLen := loopFadeFrames
+	if in < fadeLen {
+		fadeLen = in
+	}
 
 	for i := 0; i < in; i++ {
 		var l, rr float32
@@ -248,8 +262,11 @@ func (r *renderer) readSource(in int, fadeOut bool) {
 			f *= float32(loopFadeFrames-r.fadeIn) / loopFadeFrames
 			r.fadeIn--
 		}
-		if fadeOut && i >= in-loopFadeFrames {
-			f *= float32(in-i) / loopFadeFrames
+		if fadeOut && i >= in-fadeLen {
+			// Divided by the fade's own length, not by the nominal one: a
+			// chunk shorter than loopFadeFrames would otherwise start the
+			// ramp partway down instead of at unity.
+			f *= float32(in-i) / float32(fadeLen)
 		}
 		r.scratch[i*2], r.scratch[i*2+1] = l*f, rr*f
 	}

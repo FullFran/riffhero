@@ -36,7 +36,7 @@ func TestNoteName(t *testing.T) {
 func TestStringLabelsFollowTheTuning(t *testing.T) {
 	// Hard-coding "eBGDAE" would lie about a drop-D score, which is exactly
 	// the score someone is most likely to be practising.
-	if got := StringLabels(practice.StandardTuning); got != [6]string{"e", "b", "g", "D", "A", "E"} {
+	if got := StringLabels(practice.StandardTuning); got != [6]string{"e", "B", "G", "D", "A", "E"} {
 		t.Fatalf("standard tuning labelled %v", got)
 	}
 	got := StringLabels(practice.DropDTuning)
@@ -194,9 +194,11 @@ func TestHUDInputLineShowsTheDetectedPitch(t *testing.T) {
 	in := hudFixture()
 	in.Live = true
 	in.Level = -18
+	in.Present = true
 	in.HasDetected = true
 	in.Detected = practice.DetectedNote{MIDI: 45, CentsError: -7, Confidence: 0.82}
 	in.Latency = in.Clock.Frames(0.012)
+	in.Calibrated = true
 
 	got := BuildHUD(in).Input
 	for _, want := range []string{"A2", "-7¢", "82%", "12 ms"} {
@@ -206,12 +208,39 @@ func TestHUDInputLineShowsTheDetectedPitch(t *testing.T) {
 	}
 }
 
+func TestHUDInputLineDropsThePitchOnceTheStringHasDied(t *testing.T) {
+	// Leaving the last note up after it stopped sounding reads as a detector
+	// stuck on it, which is exactly what a player would then go looking for.
+	in := hudFixture()
+	in.Live = true
+	in.Level = -55
+	in.Present = false
+	in.HasDetected = true
+	in.Detected = practice.DetectedNote{MIDI: 45}
+
+	if got := BuildHUD(in).Input; strings.Contains(got, "A2") {
+		t.Fatalf("input line %q still shows a pitch nothing is producing", got)
+	}
+}
+
+func TestHUDPracticeLineSaysWhetherThereIsABacking(t *testing.T) {
+	in := hudFixture()
+	if got := BuildHUD(in).Practice; !strings.Contains(got, "backing off") {
+		t.Fatalf("practice line %q", got)
+	}
+	in.Backing = true
+	if got := BuildHUD(in).Practice; !strings.Contains(got, "backing on") {
+		t.Fatalf("practice line %q", got)
+	}
+}
+
 func TestHUDWarnsAboutDroppedSamples(t *testing.T) {
 	// From the player's side a dropped sample is indistinguishable from their
 	// own mistake, so it has to be said out loud.
 	in := hudFixture()
 	in.Live = true
 	in.Latency = 100
+	in.Calibrated = true
 	in.Dropped = 4096
 
 	warnings := BuildHUD(in).Warnings
@@ -234,10 +263,31 @@ func TestHUDWarnsAboutUnderrunsAndUncalibratedLatency(t *testing.T) {
 	}
 }
 
+func TestHUDMarksAnEstimatedLatencyAsEstimated(t *testing.T) {
+	// A number derived from the device's buffer sizes is a lower bound, not a
+	// measurement, and claiming otherwise is how a player stops trusting the
+	// timing feedback.
+	in := hudFixture()
+	in.Live = true
+	in.Level = -20
+	in.Present = true
+	in.HasDetected = true
+	in.Latency = in.Clock.Frames(0.020)
+
+	got := BuildHUD(in)
+	if !strings.Contains(got.Input, "estimated") {
+		t.Fatalf("input line %q should mark the figure as estimated", got.Input)
+	}
+	if len(got.Warnings) == 0 {
+		t.Fatal("an estimated latency should still ask to be calibrated")
+	}
+}
+
 func TestHUDIsQuietWhenNothingIsWrong(t *testing.T) {
 	in := hudFixture()
 	in.Live = true
 	in.Latency = 480
+	in.Calibrated = true
 	if got := BuildHUD(in).Warnings; len(got) != 0 {
 		t.Fatalf("warnings %v, want none", got)
 	}

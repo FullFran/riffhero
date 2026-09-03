@@ -8,6 +8,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
 	"github.com/FullFran/riffhero/internal/ui"
 )
@@ -26,19 +27,47 @@ var (
 	colorMiss       = color.RGBA{0xd9, 0x4c, 0x5a, 0xff}
 	colorLoop       = color.RGBA{0x2b, 0x3a, 0x33, 0xff}
 	colorLoopEdge   = color.RGBA{0x4c, 0xd9, 0x7a, 0x80}
-	colorWarning    = color.RGBA{0xf2, 0x8c, 0x4c, 0xff}
 	colorMeter      = color.RGBA{0x4c, 0xd9, 0x7a, 0xff}
 	colorMeterBed   = color.RGBA{0x25, 0x2a, 0x32, 0xff}
 )
 
-func (a *app) Draw(screen *ebiten.Image) {
+// drawPractice is the reading view: whichever of the tab and the staff is
+// switched on, the playhead, and the scoreboard.
+//
+// Both readings scroll on one timeline, so a note is at the same x in each and
+// showing them together lines up rather than merely coexisting. The vertical
+// space is what they share, and the tab gives up rather more than half of it
+// when they do — five staff lines with ledgers either side need the room, and
+// six strings survive being squeezed.
+func (a *app) drawPractice(screen *ebiten.Image) {
 	screen.Fill(colorBackground)
 
 	now := a.head.Position()
+	top, bottom := a.layout.Band()
+
+	a.tab = a.layout
+	staffOn := a.showsStaff()
+	switch {
+	case staffOn && a.showsTab():
+		mid := top + (bottom-top)*0.52
+		a.staff = staffFor(top, mid)
+		a.tab = a.layout.WithBand(mid+10, bottom)
+	case staffOn:
+		a.staff = staffFor(top, bottom)
+	}
+
 	a.drawLoopRegion(screen, now)
-	a.drawGrid(screen, now)
-	a.drawStrings(screen)
-	a.drawNotes(screen, now)
+	if staffOn {
+		a.drawStaffLines(screen, a.staff)
+		a.drawStaffGrid(screen, a.staff, now)
+		a.drawStaffNotes(screen, a.staff, now)
+	}
+	if a.showsTab() {
+		a.drawGrid(screen, now)
+		a.drawStrings(screen)
+		a.drawNotes(screen, now)
+	}
+	a.drawBarNumbers(screen, now)
 	a.drawPlayhead(screen, now)
 	a.drawHUD(screen)
 
@@ -54,8 +83,7 @@ func (a *app) drawLoopRegion(screen *ebiten.Image, now practice.Frame) {
 	if !ok {
 		return
 	}
-	top := float32(a.layout.StringY(1)) - 30
-	bottom := float32(a.layout.StringY(6)) + 30
+	top, bottom := a.readingBand()
 
 	vector.DrawFilledRect(screen, float32(x1), top, float32(x2-x1), bottom-top, colorLoop, false)
 	vector.StrokeLine(screen, float32(x1), top, float32(x1), bottom, 2, colorLoopEdge, false)
@@ -63,8 +91,8 @@ func (a *app) drawLoopRegion(screen *ebiten.Image, now practice.Frame) {
 }
 
 func (a *app) drawGrid(screen *ebiten.Image, now practice.Frame) {
-	top := float32(a.layout.StringY(1)) - 22
-	bottom := float32(a.layout.StringY(6)) + 22
+	top := float32(a.tab.StringY(1)) - 22
+	bottom := float32(a.tab.StringY(6)) + 22
 
 	for _, bar := range a.layout.VisibleBars(now, a.song.Grid) {
 		// Beats first so the bar line draws over them.
@@ -74,15 +102,35 @@ func (a *app) drawGrid(screen *ebiten.Image, now practice.Frame) {
 		}
 		x := float32(a.layout.NoteX(now, bar.Start))
 		vector.StrokeLine(screen, x, top, x, bottom, 1, colorBarLine, false)
-		ebitenutil.DebugPrintAt(screen, fmt.Sprintf("%d", bar.Number), int(x)+3, int(top)-14)
+	}
+}
+
+// drawBarNumbers labels the bars above everything on screen, once, whichever
+// readings are showing.
+//
+// Above the tab is where they used to go, which on the staff meant on top of
+// its low notes — and in this music that is the open low E on the downbeat,
+// the number and the note in the same place every bar.
+func (a *app) drawBarNumbers(screen *ebiten.Image, now practice.Frame) {
+	top, _ := a.readingBand()
+	y := int(top) - lineH
+	if y < ui.HeaderHeight+2 {
+		y = ui.HeaderHeight + 2
+	}
+	for _, bar := range a.layout.VisibleBars(now, a.song.Grid) {
+		x := a.layout.NoteX(now, bar.Start)
+		if x < gutterX {
+			continue
+		}
+		drawTinted(screen, fmt.Sprintf("%d", bar.Number), int(x)+3, y, menuDim)
 	}
 }
 
 func (a *app) drawStrings(screen *ebiten.Image) {
 	labels := ui.StringLabels(a.tuning())
 	for s := uint8(1); s <= 6; s++ {
-		y := float32(a.layout.StringY(s))
-		vector.StrokeLine(screen, 44, y, float32(a.layout.Width)-24, y, 1, colorString, false)
+		y := float32(a.tab.StringY(s))
+		vector.StrokeLine(screen, gutterX, y, float32(a.layout.Width)-24, y, 1, colorString, false)
 		ebitenutil.DebugPrintAt(screen, labels[s-1], 26, int(y)-7)
 	}
 }
@@ -114,7 +162,12 @@ func (a *app) drawNotes(screen *ebiten.Image, now practice.Frame) {
 
 func (a *app) drawNote(screen *ebiten.Image, now practice.Frame, n practice.Note, c color.RGBA, highlight bool) {
 	x := float32(a.layout.NoteX(now, n.Start))
-	y := float32(a.layout.StringY(n.String))
+	if x < gutterX {
+		// The left edge is the string names' column; a note drawn into it
+		// lands on top of them.
+		return
+	}
+	y := float32(a.tab.StringY(n.String))
 
 	// A held note is drawn as a bar rather than a dot, so a whole note and a
 	// sixteenth do not look like the same instruction.
@@ -137,13 +190,12 @@ func fretOffset(fret uint8) int {
 
 func (a *app) drawPlayhead(screen *ebiten.Image, now practice.Frame) {
 	x := float32(a.layout.PlayheadX)
-	top := float32(a.layout.StringY(1)) - 30
-	bottom := float32(a.layout.StringY(6)) + 30
+	top, bottom := a.readingBand()
 	vector.StrokeLine(screen, x, top, x, bottom, 2, colorPlayhead, false)
 
 	if a.runner.Session().HasRating() {
 		label := ui.RatingLabel(a.runner.Session().LastRating())
-		ebitenutil.DebugPrintAt(screen, label, int(x)-len(label)*3, int(bottom)+10)
+		ebitenutil.DebugPrintAt(screen, label, int(x-float32(textWidth(label))/2), int(bottom)+10)
 	}
 	_ = now
 }
@@ -160,7 +212,8 @@ func (a *app) drawHUD(screen *ebiten.Image) {
 	ebitenutil.DebugPrintAt(screen, hud.Score, 16, bottom-64)
 	ebitenutil.DebugPrintAt(screen, hud.Practice, 16, bottom-48)
 	ebitenutil.DebugPrintAt(screen, hud.Input, 16, bottom-32)
-	ebitenutil.DebugPrintAt(screen, "H help    ESC quit", int(a.layout.Width)-150, bottom-16)
+	hint := i18n.T("H help    ESC menu")
+	drawDim(screen, hint, int(a.layout.Width)-16-int(textWidth(hint)), bottom-16)
 
 	a.drawMeter(screen, bottom)
 
@@ -176,6 +229,40 @@ func (a *app) drawHUD(screen *ebiten.Image) {
 	if a.noticeTicks > 0 {
 		ebitenutil.DebugPrintAt(screen, a.notice, 16, y+4)
 	}
+}
+
+// readingBand is the vertical span the playhead and the loop shading cover.
+//
+// It is what is actually on show, not the space that was available. Shading a
+// whole empty window green because one staff is being drawn in the middle of
+// it tells the player nothing about where the region is.
+func (a *app) readingBand() (top, bottom float32) {
+	t, b := 0.0, 0.0
+	set := false
+	stretch := func(lo, hi float64) {
+		if !set {
+			t, b, set = lo, hi, true
+			return
+		}
+		if lo < t {
+			t = lo
+		}
+		if hi > b {
+			b = hi
+		}
+	}
+
+	if a.showsStaff() {
+		stretch(staffExtent(a.staff))
+	}
+	if a.showsTab() {
+		stretch(a.tab.StringY(1)-26, a.tab.StringY(6)+26)
+	}
+	if !set {
+		lo, hi := a.layout.Band()
+		return float32(lo), float32(hi)
+	}
+	return float32(t), float32(b)
 }
 
 // drawMeter is the input level, drawn rather than spelled out: a bar is read
@@ -207,7 +294,6 @@ func (a *app) hudInput() ui.HUDInput {
 		Title:    a.song.Title,
 		Artist:   a.song.Artist,
 		Track:    a.song.Tracks[a.track].Name,
-		Source:   a.song.Source,
 		Position: a.head.Position(),
 		End:      a.head.End(),
 		Playing:  a.head.Playing(),
@@ -221,7 +307,7 @@ func (a *app) hudInput() ui.HUDInput {
 		Rating:   session.LastRating(),
 		HasRatng: session.HasRating(),
 		Live:     a.live(),
-		Backing:  a.opts.backing != "",
+		Backing:  a.backingPath != "",
 
 		Detected:    a.lastNote,
 		HasDetected: a.hasNote,
@@ -231,6 +317,7 @@ func (a *app) hudInput() ui.HUDInput {
 		in.Present = a.det.Present()
 		in.Dropped = a.det.Dropped()
 		in.Latency = a.det.LatencyOffset
+		in.Calibrated = a.calibrated
 	}
 	if a.engine != nil {
 		in.Underruns = a.engine.Underruns()
@@ -238,41 +325,86 @@ func (a *app) hudInput() ui.HUDInput {
 	return in
 }
 
-var helpLines = []string{
-	"RiffHero",
-	"",
-	"  SPACE      play / pause",
-	"  R          restart and clear the scoreboard",
-	"  LEFT/RIGHT seek a bar back / forward",
-	"  HOME/END   jump to the start / the end",
-	"",
-	"  A          set the loop start at the playhead",
-	"  B          set the loop end",
-	"  L          loop on / off",
-	"  X          clear the loop",
-	"",
-	"  [ ]        practice speed down / up",
-	"  P          progressive practice on / off",
-	"  - =        backing track quieter / louder",
-	"  M          guitar monitoring level",
-	"  TAB        next track",
-	"",
-	"  H          this help",
-	"  ESC        quit",
-	"",
-	"Loop a hard bar, turn on progressive practice and play it clean:",
-	"the speed comes up on its own until you are at tempo.",
+// helpLines is worked out afresh every time it is drawn rather than once at
+// init: the language is settled after the package variables are, and a table
+// built too early stays in the language the process started in.
+func helpLines() []string {
+	return []string{
+		"RiffHero",
+		"",
+		i18n.T("  ESC        back to the menu"),
+		i18n.T("  S          settings"),
+		i18n.T("  N          tablature / notation / both"),
+		i18n.T("  SPACE      play / pause"),
+		i18n.T("  R          restart and clear the scoreboard"),
+		i18n.T("  LEFT/RIGHT seek a bar back / forward"),
+		i18n.T("  HOME/END   jump to the start / the end"),
+		"",
+		i18n.T("  A          set the loop start at the playhead"),
+		i18n.T("  B          set the loop end"),
+		i18n.T("  L          loop on / off"),
+		i18n.T("  X          clear the loop"),
+		"",
+		i18n.T("  [ ]        practice speed down / up"),
+		i18n.T("  P          progressive practice on / off"),
+		i18n.T("  - =        backing track quieter / louder"),
+		i18n.T("  M          guitar monitoring level"),
+		i18n.T("  TAB        next track"),
+		"",
+		i18n.T("  H          this help"),
+		i18n.T("  ESC        back to the menu"),
+		"",
+		i18n.T("Loop a hard bar, turn on progressive practice and play it clean:"),
+		i18n.T("the speed comes up on its own until you are at tempo."),
+	}
 }
 
+// drawHelp is the key list, clipped to the window rather than centred blindly.
+//
+// Centred on a window shorter than the panel, the first lines land above the
+// top edge and the last below the bottom, and at 400 px wide the left margin
+// goes negative and cuts two characters off every line. What does not fit is
+// scrolled off the end instead, which loses the last few keys rather than the
+// first few and the left of all of them.
 func (a *app) drawHelp(screen *ebiten.Image) {
-	w, h := float32(460), float32(len(helpLines)*14+32)
+	const pad, lineStep = 18, 14
+
+	lines := helpLines()
+
+	w := float32(0)
+	for _, line := range lines {
+		if tw := float32(textWidth(line)) + 2*pad; tw > w {
+			w = tw
+		}
+	}
+	if limit := float32(a.layout.Width) - 24; w > limit {
+		w = limit
+	}
 	x := float32(a.layout.Width)/2 - w/2
+	if x < 12 {
+		x = 12
+	}
+
+	visible := len(lines)
+	if room := (int(a.layout.Height) - 40 - 32) / lineStep; visible > room {
+		visible = room
+	}
+	if visible < 1 {
+		return
+	}
+	h := float32(visible*lineStep + 32)
 	y := float32(a.layout.Height)/2 - h/2
+	if y < 12 {
+		y = 12
+	}
 
 	vector.DrawFilledRect(screen, x, y, w, h, colorPanel, false)
 	vector.StrokeRect(screen, x, y, w, h, 1, colorString, false)
-	for i, line := range helpLines {
-		ebitenutil.DebugPrintAt(screen, line, int(x)+18, int(y)+16+i*14)
+	for i, line := range lines[:visible] {
+		drawTinted(screen, clip(line, int(w-2*pad)/glyphW), int(x)+pad, int(y)+16+i*lineStep, menuInk)
+	}
+	if visible < len(lines) {
+		drawDim(screen, "...", int(x)+pad, int(y+h)-16)
 	}
 }
 

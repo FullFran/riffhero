@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -458,6 +459,94 @@ func TestTieExtendsNoteAcrossBarline(t *testing.T) {
 	})
 }
 
+// A tie may only continue a note that is still sounding at the instant the
+// destination starts. The held-note map is keyed by voice and string and lives
+// for the whole track, so "there is an entry" proves nothing on its own: it is
+// whatever was last struck on that string, however long ago. The three tests
+// below are the three ways that used to go wrong.
+
+func TestTieDoesNotResurrectANoteFromSevenBarsAgo(t *testing.T) {
+	song := mustParse(t, doc{
+		Automations: tempoXML(0, 0, 120),
+		Tracks:      guitarTrack(),
+		MasterBars: masterBarXML("4/4", "0", "") + // the written note
+			strings.Repeat(masterBarXML("4/4", "1", ""), 6) + // six bars of silence
+			masterBarXML("4/4", "2", ""), // a dropped tie origin, then its destination
+		Bars:   barXML(0, "0 -1 -1 -1") + barXML(1, "1 -1 -1 -1") + barXML(2, "2 -1 -1 -1"),
+		Voices: voiceXML(0, "0") + voiceXML(1, "1") + voiceXML(2, "2 3"),
+		Beats: beatXML(0, 0, "0") + beatXML(1, 0, "") +
+			beatXML(2, 1, "1") + beatXML(3, 1, "2"),
+		// Fret 99 is off the end of the neck, so the origin is dropped. That is
+		// not an exotic failure: a note with no Fret property, an unresolved
+		// rhythm reference and a grace beat all disappear the same way.
+		Notes: noteXML(0, 5, 3, "") +
+			noteXML(1, 5, 99, `<Tie origin="true" destination="false"/>`) +
+			noteXML(2, 5, 3, `<Tie origin="false" destination="true"/>`),
+		Rhythms: rhythmXML(0, "Whole", "") + rhythmXML(1, "Half", ""),
+	})
+
+	// What a player does: strike the whole note in bar 1, wait out six bars,
+	// then strike the half note in the middle of bar 8. Two attacks.
+	//
+	// What this used to produce: the destination found bar 1's note still in
+	// the map, stretched it to the end of bar 8 and emitted nothing of its own
+	// — one note over the whole song, and the written one gone.
+	assertNotes(t, onlyTrack(t, song).Notes, []wantNote{
+		{start: 0, duration: barAt120, midi: 67, str: 1, fret: 3},
+		{start: 7*barAt120 + barAt120/2, duration: barAt120 / 2, midi: 67, str: 1, fret: 3},
+	})
+}
+
+func TestTieDoesNotBridgeARest(t *testing.T) {
+	song := mustParse(t, doc{
+		Automations: tempoXML(0, 0, 120),
+		Tracks:      guitarTrack(),
+		MasterBars:  masterBarXML("4/4", "0", "") + masterBarXML("4/4", "1", ""),
+		Bars:        barXML(0, "0 -1 -1 -1") + barXML(1, "1 -1 -1 -1"),
+		Voices:      voiceXML(0, "0 1") + voiceXML(1, "2 3"),
+		Beats: beatXML(0, 0, "0") + beatXML(1, 0, "") + // a half note, then a half rest
+			beatXML(2, 0, "1") + beatXML(3, 0, ""), // the "tied" half, then a half rest
+		Notes:   noteXML(0, 5, 7, `<Tie origin="true" destination="false"/>`) + noteXML(1, 5, 7, `<Tie origin="false" destination="true"/>`),
+		Rhythms: rhythmXML(0, "Half", ""),
+	})
+
+	// The rest between them is the point: the origin stopped sounding half a
+	// bar before the destination begins, so a player strikes the string again.
+	// Extending across the gap would delete the rest as well as the attack.
+	assertNotes(t, onlyTrack(t, song).Notes, []wantNote{
+		{start: 0, duration: barAt120 / 2, midi: 71, str: 1, fret: 7},
+		{start: barAt120, duration: barAt120 / 2, midi: 71, str: 1, fret: 7},
+	})
+}
+
+func TestTieFromADroppedGraceNoteDoesNotSwallowItsMainNote(t *testing.T) {
+	song := mustParse(t, doc{
+		Automations: tempoXML(0, 0, 120),
+		Tracks:      guitarTrack(),
+		MasterBars:  masterBarXML("4/4", "0", ""),
+		Bars:        barXML(0, "0 -1 -1 -1"),
+		Voices:      voiceXML(0, "0 1 2 3"),
+		Beats: beatXML(0, 0, "0") + // a plain quarter on the same string
+			`<Beat id="1"><Rhythm ref="1"/><GraceNotes>BeforeBeat</GraceNotes><Notes>1</Notes></Beat>` +
+			beatXML(2, 0, "2") + // the main note the grace note is tied into
+			beatXML(3, 2, ""), // half rest, filling out the bar
+		Notes: noteXML(0, 5, 5, "") +
+			noteXML(1, 5, 7, `<Tie origin="true" destination="false"/>`) +
+			noteXML(2, 5, 7, `<Tie origin="false" destination="true"/>`),
+		Rhythms: rhythmXML(0, "Quarter", "") + rhythmXML(1, "16th", "") + rhythmXML(2, "Half", ""),
+	})
+
+	// A grace beat owns none of the bar's time, so dropping it leaves the
+	// quarter before it ending on the exact frame the main note starts on.
+	// That is the one gap adjacency alone cannot see, and a grace-to-main tie
+	// is ordinary guitar notation rather than a corrupt file: the fret-5 note
+	// used to grow to half a bar and the fret-7 note used to vanish.
+	assertNotes(t, onlyTrack(t, song).Notes, []wantNote{
+		{start: 0, duration: quarterAt120, midi: 69, str: 1, fret: 5},
+		{start: quarterAt120, duration: quarterAt120, midi: 71, str: 1, fret: 7},
+	})
+}
+
 func TestRepeatCountExpandsEveryPass(t *testing.T) {
 	song := mustParse(t, doc{
 		Automations: tempoXML(0, 0, 120),
@@ -831,6 +920,141 @@ func TestRunawayRepeatIsRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "repeat structure") {
 		t.Errorf("error %q does not explain that the repeat structure is the problem", err)
 	}
+}
+
+// --- repeat expansion ------------------------------------------------------
+//
+// The order the bars come out in is the whole answer for these, so they assert
+// on it directly instead of reading it back out of the notes it produces. The
+// master bars are still written as XML, because the repeat and alternate-ending
+// signs are the format and the tests have to state them.
+
+func expandOrder(t *testing.T, masterBars string) []int {
+	t.Helper()
+	var parsed gpif
+	if err := unmarshalDoc(doc{MasterBars: masterBars}, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	order, err := expandRepeats(parsed.MasterBars)
+	if err != nil {
+		t.Fatalf("expandRepeats: %v", err)
+	}
+	return order
+}
+
+func expandErr(t *testing.T, masterBars string) error {
+	t.Helper()
+	var parsed gpif
+	if err := unmarshalDoc(doc{MasterBars: masterBars}, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	order, err := expandRepeats(parsed.MasterBars)
+	if err == nil {
+		t.Fatalf("expandRepeats produced %d bars, want an error", len(order))
+	}
+	return err
+}
+
+// signedBar is one master bar carrying nothing but its repeat and alternate
+// ending signs; every one of them points at the same bar id, because these
+// tests never look at the music.
+func signedBar(extra string) string { return masterBarXML("4/4", "0", extra) }
+
+func repeatStart() string { return `<Repeat start="true" end="false" count="0"/>` }
+
+func repeatEnd(count int) string {
+	return fmt.Sprintf(`<Repeat start="false" end="true" count="%d"/>`, count)
+}
+
+func ending(numbers string) string {
+	return fmt.Sprintf(`<AlternateEndings>%s</AlternateEndings>`, numbers)
+}
+
+func TestNestedRepeatsRewindToTheirOwnStart(t *testing.T) {
+	// Four bars A B C D, with |: on A, |: on B, :| on C and :| on D: an inner
+	// repeat (B C) sitting inside an outer one (A to D).
+	got := expandOrder(t,
+		signedBar(repeatStart())+ // 0  A
+			signedBar(repeatStart())+ // 1  B
+			signedBar(repeatEnd(2))+ // 2  C
+			signedBar(repeatEnd(2))) // 3  D
+
+	// What a player does: A, then B C twice, then D. The outer sign has not
+	// been satisfied yet, so back to A and the whole thing again, inner repeat
+	// included.
+	//
+	// What this used to produce: [0 1 2 1 2 3 3]. The inner |: overwrote the
+	// single repeatStart variable, so the outer :| rewound to just after the
+	// inner section, replaying a bar that is written once and never replaying
+	// the bar the outer sign actually points at.
+	want := []int{0, 1, 2, 1, 2, 3, 0, 1, 2, 1, 2, 3}
+	if !slices.Equal(got, want) {
+		t.Errorf("played bars = %v, want %v", got, want)
+	}
+}
+
+func TestRepeatAfterAnAlternateEndingIsNotSwallowed(t *testing.T) {
+	// |: A | 1.B :| 2.C | D | E :|
+	//
+	// The repeat sign lives on the first ending, so on the second pass the bar
+	// carrying it is skipped and the section ends without its own sign ever
+	// firing. That is the pass that used to leave the state machine dirty.
+	got := expandOrder(t,
+		signedBar(repeatStart())+ // 0  A
+			signedBar(repeatEnd(2)+ending("1"))+ // 1  first ending
+			signedBar(ending("2"))+ // 2  second ending
+			signedBar("")+ // 3  D
+			signedBar(repeatEnd(2))) // 4  E
+
+	// What a player does: A, first ending, A again, second ending, then D E
+	// twice for the trailing repeat.
+	//
+	// What this used to produce: [0 1 0 2 3 4]. The skipped sign left the pass
+	// counter at 1, so the trailing repeat thought it had already been played
+	// once and did nothing at all.
+	want := []int{0, 1, 0, 2, 3, 4, 3, 4}
+	if !slices.Equal(got, want) {
+		t.Errorf("played bars = %v, want %v", got, want)
+	}
+}
+
+func TestMalformedNestingTerminatesInsteadOfLooping(t *testing.T) {
+	t.Run("nesting that explodes", func(t *testing.T) {
+		// Thirteen |: ... :| pairs inside one another double the innermost bar
+		// thirteen times over: 26 written bars become 32764 played ones. A
+		// stack makes that expansion reachable, which is exactly why the cap
+		// has to stay.
+		var b strings.Builder
+		const pairs = 13
+		for range pairs {
+			b.WriteString(signedBar(repeatStart()))
+		}
+		for range pairs {
+			b.WriteString(signedBar(repeatEnd(2)))
+		}
+
+		if err := expandErr(t, b.String()); !strings.Contains(err.Error(), "repeat structure") {
+			t.Errorf("error %q does not explain that the repeat structure is the problem", err)
+		}
+	})
+
+	t.Run("a walk that plays almost nothing", func(t *testing.T) {
+		// A fifty-bar first ending inside a repeat asking for 20000 passes.
+		// Every pass after the first plays two bars and skips fifty, so the
+		// output cap would let this run for half a million steps before it
+		// noticed anything was wrong. The step cap is what stops it, and this
+		// is why there are two caps rather than one.
+		var b strings.Builder
+		b.WriteString(signedBar(repeatStart()))
+		for range 50 {
+			b.WriteString(signedBar(ending("1")))
+		}
+		b.WriteString(signedBar(repeatEnd(20000)))
+
+		if err := expandErr(t, b.String()); !strings.Contains(err.Error(), "steps") {
+			t.Errorf("error %q does not name the step cap", err)
+		}
+	})
 }
 
 func TestDirectionJumpsArePlayedStraightThrough(t *testing.T) {

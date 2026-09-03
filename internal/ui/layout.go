@@ -9,6 +9,23 @@ import (
 	"github.com/FullFran/riffhero/internal/practice"
 )
 
+// HeaderHeight and FooterHeight are the panels the tab must not run under.
+// The layout knows about them because it is the thing that decides where the
+// strings go, and a tab that slides under the scoreboard is unreadable.
+const (
+	HeaderHeight = 46
+	FooterHeight = 74
+
+	// tabMargin is the clearance either side of the strings, for bar numbers
+	// above and the rating below.
+	tabMargin = 44
+
+	// maxStringSpacing stops a very tall window spreading six strings across
+	// half a metre of screen, where the eye has to travel between them.
+	maxStringSpacing = 78
+	minStringSpacing = 18
+)
+
 // Layout maps the practice timeline onto a scrolling six-string tab. Notes
 // travel right to left and are due when they cross the playhead.
 type Layout struct {
@@ -22,14 +39,24 @@ type Layout struct {
 	clock practice.Clock
 }
 
+// NewLayout centres the tab in whatever room is left between the panels.
+//
+// The window is whatever the window manager decides — a tiling desktop will
+// hand this a tall half-screen without asking — so the geometry is derived
+// from the space available rather than from fractions of the total height,
+// which left a third of the window empty at the top and bottom.
 func NewLayout(width, height float64, clock practice.Clock) Layout {
-	spacing := height * 0.09
+	const top = HeaderHeight + tabMargin
+	bottom := height - FooterHeight - tabMargin
+
+	spacing, first := fitStrings(top, bottom)
+
 	return Layout{
 		Width:           width,
 		Height:          height,
-		PlayheadX:       width * 0.28,
+		PlayheadX:       width * 0.25,
 		PixelsPerSecond: 220,
-		TopString:       height * 0.26,
+		TopString:       first,
 		StringSpacing:   spacing,
 		clock:           clock,
 	}
@@ -96,4 +123,41 @@ func (l Layout) VisibleBars(now practice.Frame, grid practice.Grid) []practice.B
 		out = append(out, bar)
 	}
 	return out
+}
+
+// Band is the vertical space between the header and the footer that a reading
+// is drawn in.
+func (l Layout) Band() (top, bottom float64) {
+	return HeaderHeight + tabMargin, l.Height - FooterHeight - tabMargin
+}
+
+// WithBand re-centres the tab inside a narrower band, which is how it makes
+// room for standard notation above it when both readings are shown.
+func (l Layout) WithBand(top, bottom float64) Layout {
+	l.StringSpacing, l.TopString = fitStrings(top, bottom)
+	return l
+}
+
+// fitStrings spaces six strings inside a band and says where the first one
+// goes.
+//
+// The centring is done after the clamp, and then the origin is pinned to the
+// top of the band. Without that pin a band thinner than the minimum spacing
+// needs gets a negative offset, and the tab is drawn *above* the space it was
+// handed — over the staff in a window short enough, or under the header in a
+// tab-only one. Overflowing downwards is ugly; overflowing upwards is two
+// readings on top of each other.
+func fitStrings(top, bottom float64) (spacing, first float64) {
+	spacing = (bottom - top) / 5
+	switch {
+	case spacing > maxStringSpacing:
+		spacing = maxStringSpacing
+	case spacing < minStringSpacing:
+		spacing = minStringSpacing
+	}
+	first = top + ((bottom-top)-spacing*5)/2
+	if first < top {
+		first = top
+	}
+	return spacing, first
 }

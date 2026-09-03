@@ -2,6 +2,8 @@ package midi
 
 import (
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/FullFran/riffhero/internal/practice"
@@ -447,12 +449,14 @@ func TestSMPTEDivision(t *testing.T) {
 	}
 }
 
-func TestUnplaceableNoteClampsToNearestPosition(t *testing.T) {
+// A MIDI file written for another instrument routinely goes below or above a
+// guitar. Both notes here are outside StandardTuning's MIDI 40-88.
+func TestOutOfRangeNotesMoveByWholeOctaves(t *testing.T) {
 	const division = 480
 	clock := practice.Clock{SampleRate: 48000}
 
-	// MIDI 20 is far below StandardTuning's lowest open string (40); MIDI
-	// 110 is far above its highest fretted note (88, string 1 fret 24).
+	// 20 is far below the open low E (40) and 110 far above the top fretted
+	// note (88, string 1 fret 24).
 	track := newTrack().
 		tempo(0, 500000).
 		noteOn(0, 0, 20, 100).
@@ -470,17 +474,49 @@ func TestUnplaceableNoteClampsToNearestPosition(t *testing.T) {
 	if len(song.Tracks) != 1 || len(song.Tracks[0].Notes) != 2 {
 		t.Fatalf("unexpected shape: %+v", song.Tracks)
 	}
-	byMIDI := map[uint8]practice.Note{}
+
+	// 20 comes up two octaves to 44, 110 comes down two to 86. Moving by
+	// octaves keeps a bass line a bass line; clamping to the nearest end of
+	// the range would flatten it into a drone on one note.
+	got := map[uint8]bool{}
 	for _, n := range song.Tracks[0].Notes {
-		byMIDI[n.MIDI] = n
+		got[n.MIDI] = true
 	}
-	low := byMIDI[20]
-	if low.String != 6 || low.Fret != 0 {
-		t.Fatalf("low note position = string %d fret %d, want string 6 fret 0 (clamped to open low E)", low.String, low.Fret)
+	for _, want := range []uint8{44, 86} {
+		if !got[want] {
+			t.Fatalf("expected a note at MIDI %d, got %+v", want, song.Tracks[0].Notes)
+		}
 	}
-	high := byMIDI[110]
-	if high.String != 1 || high.Fret != 24 {
-		t.Fatalf("high note position = string %d fret %d, want string 1 fret 24 (clamped to top of the neck)", high.String, high.Fret)
+}
+
+// The tablature and the expected pitch must agree. They did not once: an
+// out-of-range note kept its original MIDI number while its string and fret
+// came from a clamped one, so the tab showed a position that sounds something
+// else and the scorer waited for a pitch no guitar can produce.
+func TestEveryNoteSoundsWhatItsTabSays(t *testing.T) {
+	const division = 480
+	clock := practice.Clock{SampleRate: 48000}
+
+	b := newTrack().tempo(0, 500000)
+	for _, midi := range []uint8{20, 33, 40, 55, 64, 88, 100, 110} {
+		b = b.noteOn(0, 0, midi, 100).noteOff(division, 0, midi)
+	}
+	data := smf(header(0, 1, division), b.endOfTrack(0).chunk())
+
+	song, err := Parse(data, clock)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(song.Tracks) != 1 {
+		t.Fatalf("unexpected shape: %+v", song.Tracks)
+	}
+
+	tuning := song.Tracks[0].Tuning
+	for i, n := range song.Tracks[0].Notes {
+		if got := tuning.MIDI(n.String, n.Fret); got != n.MIDI {
+			t.Fatalf("note %d says MIDI %d but string %d fret %d sounds %d",
+				i, n.MIDI, n.String, n.Fret, got)
+		}
 	}
 }
 
@@ -561,4 +597,255 @@ func TestParseFileRoundTrip(t *testing.T) {
 	if len(song.Tracks) != 1 || len(song.Tracks[0].Notes) != 1 {
 		t.Fatalf("unexpected shape: %+v", song.Tracks)
 	}
+}
+
+// The grid and the notes have to come from the same tempo map. They did not:
+// the grid was assembled from per-section bar counts rounded up to whole bars
+// while the notes were placed from the exact tempo map, so a tempo change in
+// the middle of a bar shifted one and not the other. On this file the note on
+// the bar-2 downbeat landed at 180000 frames (3.750 s) and the grid put bar 2
+// at 96000 (2.000 s). Every bar after it inherited the gap, which means the
+// bar/beat readout, A-B loop selection and Song.End were all wrong.
+//
+// The property this pins is the one that was broken: a note written on a
+// downbeat must land on that bar's Start, exactly.
+func TestGridBarsLandOnTheNotesAcrossAMidBarTempoChange(t *testing.T) {
+	const division = 480
+	clock := practice.Clock{SampleRate: 48000}
+
+	// 120 BPM (500000 us/quarter) for the first half of bar 1, then a big drop
+	// to 1375000 us/quarter — 2864.583... us per tick, so 960 ticks come to
+	// exactly 2.75 s and no rounding hides a mistake.
+	track := newTrack().
+		tempo(0, 500000).
+		noteOn(0, 0, 60, 100).          // tick 0, bar 1 downbeat
+		noteOff(division, 0, 60).       //
+		tempo(division, 1375000).       // tick 960, halfway through bar 1
+		noteOn(2*division, 0, 62, 100). // tick 1920, bar 2 downbeat
+		noteOff(division, 0, 62).       //
+		noteOn(3*division, 0, 64, 100). // tick 3840, bar 3 downbeat
+		noteOff(division, 0, 64).       //
+		noteOn(3*division, 0, 65, 100). // tick 5760, bar 4 downbeat
+		noteOff(division, 0, 65).       //
+		endOfTrack(3 * division).
+		chunk()
+
+	song, err := Parse(smf(header(0, 1, division), track), clock)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(song.Grid) != 4 {
+		t.Fatalf("len(Grid) = %d, want 4", len(song.Grid))
+	}
+	notes := song.Tracks[0].Notes
+	if len(notes) != 4 {
+		t.Fatalf("len(Notes) = %d, want 4", len(notes))
+	}
+
+	// One note per bar, each written on the downbeat.
+	for i, n := range notes {
+		bar := song.Grid[i]
+		if bar.Start != n.Start {
+			t.Errorf("bar %d starts at %d (%.3fs) but its downbeat note is at %d (%.3fs)",
+				bar.Number, bar.Start, clock.Seconds(bar.Start), n.Start, clock.Seconds(n.Start))
+		}
+		if got := song.Grid.Locate(n.Start); got.Bar != i+1 || got.Beat != 1 || !got.Valid {
+			t.Errorf("Locate(note %d at %d) = %+v, want bar %d beat 1", i, n.Start, got, i+1)
+		}
+		// A-B loop selection snaps to beats; a downbeat must snap to itself.
+		if got := song.Grid.Snap(n.Start); got != n.Start {
+			t.Errorf("Snap(%d) = %d, want the frame itself", n.Start, got)
+		}
+	}
+
+	// Absolute positions, so a systematic shift cannot hide behind the
+	// note-to-bar comparison above.
+	for i, want := range []practice.Frame{0, 180000, 444000, 708000} {
+		if song.Grid[i].Start != want {
+			t.Errorf("bar %d starts at %d, want %d", i+1, song.Grid[i].Start, want)
+		}
+	}
+
+	// Bar 2 sits entirely at the second tempo, so its beats are exact: four
+	// beats of 1.375 s each, 66000 frames apart.
+	for i, want := range []practice.Frame{180000, 246000, 312000, 378000} {
+		if song.Grid[1].Beats[i] != want {
+			t.Errorf("bar 2 beat %d at %d, want %d", i+1, song.Grid[1].Beats[i], want)
+		}
+	}
+
+	// Bar 1 is the one the tempo change lands inside, and practice.GridFrom
+	// spreads beats evenly across a bar rather than following the tempo map
+	// through it. Beats 2-4 are therefore approximate here — that is the
+	// domain's documented choice — but the downbeat, which is what loops and
+	// the bar readout anchor to, is still exactly the bar's own start.
+	if song.Grid[0].Beats[0] != song.Grid[0].Start {
+		t.Errorf("bar 1 downbeat at %d, want the bar start %d", song.Grid[0].Beats[0], song.Grid[0].Start)
+	}
+	for i := 1; i < len(song.Grid[0].Beats); i++ {
+		prev, at := song.Grid[0].Beats[i-1], song.Grid[0].Beats[i]
+		if at <= prev || at >= song.Grid[0].End {
+			t.Errorf("bar 1 beat %d at %d is not inside (%d,%d)", i+1, at, prev, song.Grid[0].End)
+		}
+	}
+
+	// The loop the player asks for has to be the bars they get: bar 2 alone
+	// must span exactly from its own note to the next bar's.
+	from, to := song.Grid.Span(1, 1)
+	if from != notes[1].Start || to != notes[2].Start {
+		t.Errorf("Span(bar 2) = [%d,%d), want [%d,%d)", from, to, notes[1].Start, notes[2].Start)
+	}
+
+	// The grid has to reach the end of the music, not stop short of it.
+	if song.Grid.End() < song.Tracks[0].End() {
+		t.Errorf("Grid ends at %d, before the last note at %d", song.Grid.End(), song.Tracks[0].End())
+	}
+}
+
+// An accelerando is exported as one Set Tempo per beat. Cutting a section at
+// every tempo change and rounding each one up to a whole bar turned this
+// 100-bar song into a 400-bar grid; bars come from the meter, and a tempo
+// change only says how long one lasts.
+func TestAccelerandoDoesNotInventBars(t *testing.T) {
+	const division = 480
+	const bars = 100
+	const beats = bars * 4
+	clock := practice.Clock{SampleRate: 48000}
+
+	tb := newTrack()
+	for i := 0; i < beats; i++ {
+		delta := uint32(division)
+		if i == 0 {
+			delta = 0
+		}
+		tb = tb.tempo(delta, uint32(600000-i*1000)) // 100 BPM accelerating to 500
+	}
+	// A note closing the last bar, so the song end is a bar boundary.
+	tb = tb.noteOn(0, 0, 60, 100).noteOff(division, 0, 60).endOfTrack(0)
+
+	song, err := Parse(smf(header(0, 1, division), tb.chunk()), clock)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(song.Grid) != bars {
+		t.Fatalf("len(Grid) = %d, want %d — one Set Tempo per beat must not manufacture bars", len(song.Grid), bars)
+	}
+	// The grid still has to be contiguous and monotonic through the ramp.
+	for i := 1; i < len(song.Grid); i++ {
+		if song.Grid[i].Start != song.Grid[i-1].End {
+			t.Fatalf("bar %d starts at %d but bar %d ended at %d", i+1, song.Grid[i].Start, i, song.Grid[i-1].End)
+		}
+	}
+}
+
+// A file's tick positions are unbounded and every bar costs a practice.Bar
+// plus a slice of beat frames. This 36-byte input used to produce 500,000 bars
+// and 205 MiB of heap; a single maximal delta reaches ~67 million bars.
+func TestImplausibleBarCountIsRefusedNotAllocated(t *testing.T) {
+	clock := practice.Clock{SampleRate: 48000}
+
+	// division 1: one tick per quarter note, so two million ticks is half a
+	// million bars of 4/4.
+	track := newTrack().
+		noteOn(0, 0, 60, 100).
+		noteOff(2000000, 0, 60).
+		endOfTrack(0).
+		chunk()
+	data := smf(header(0, 1, 1), track)
+	if len(data) > 64 {
+		t.Fatalf("the point is that a tiny file does this: got %d bytes", len(data))
+	}
+
+	song, err := Parse(data, clock)
+	if err == nil {
+		t.Fatalf("Parse accepted a %d-bar song from %d bytes", len(song.Grid), len(data))
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(maxGridBars)) {
+		t.Fatalf("error %q does not name the %d-bar limit", err, maxGridBars)
+	}
+}
+
+// A note still sounding at End of Track used to vanish with the active map:
+// no error, no partial note, nothing. Forgetting a Note Off is a common enough
+// export bug that silently dropping the note is the wrong answer — we know
+// where it started and we know where the track stops.
+func TestNoteStillSoundingAtEndOfTrackIsClosed(t *testing.T) {
+	const division = 480
+	clock := practice.Clock{SampleRate: 48000}
+
+	t.Run("closed at the end-of-track tick", func(t *testing.T) {
+		track := newTrack().
+			tempo(0, 500000).
+			noteOn(0, 0, 60, 100).
+			noteOff(division, 0, 60).
+			noteOn(0, 0, 64, 100). // tick 480, never released
+			endOfTrack(division).  // tick 960
+			chunk()
+
+		song, err := Parse(smf(header(0, 1, division), track), clock)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		notes := song.Tracks[0].Notes
+		if len(notes) != 2 {
+			t.Fatalf("len(Notes) = %d, want 2 — the unreleased E4 was dropped: %+v", len(notes), notes)
+		}
+		quarter := clock.Frames(0.5)
+		if notes[1].MIDI != 64 {
+			t.Fatalf("second note MIDI = %d, want 64", notes[1].MIDI)
+		}
+		if notes[1].Start != quarter || notes[1].Duration != quarter {
+			t.Fatalf("E4 = Start %d Duration %d, want %d and %d", notes[1].Start, notes[1].Duration, quarter, quarter)
+		}
+	})
+
+	t.Run("closed at the last event when there is no end-of-track", func(t *testing.T) {
+		track := newTrack().
+			tempo(0, 500000).
+			noteOn(0, 0, 60, 100).
+			text(division, "no end of track here").
+			chunk()
+
+		song, err := Parse(smf(header(0, 1, division), track), clock)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if len(song.Tracks) != 1 || len(song.Tracks[0].Notes) != 1 {
+			t.Fatalf("unexpected shape: %+v", song.Tracks)
+		}
+		if want := clock.Frames(0.5); song.Tracks[0].Notes[0].Duration != want {
+			t.Fatalf("Duration = %d, want %d", song.Tracks[0].Notes[0].Duration, want)
+		}
+	})
+
+	t.Run("a chord left hanging comes back in a stable order", func(t *testing.T) {
+		track := newTrack().
+			tempo(0, 500000).
+			noteOn(0, 0, 60, 100).
+			noteOn(0, 0, 64, 100).
+			noteOn(0, 0, 67, 100).
+			endOfTrack(division).
+			chunk()
+		data := smf(header(0, 1, division), track)
+
+		var first []practice.Note
+		for i := 0; i < 8; i++ {
+			song, err := Parse(data, clock)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(song.Tracks) != 1 || len(song.Tracks[0].Notes) != 3 {
+				t.Fatalf("unexpected shape, want one track of 3 notes: %+v", song.Tracks)
+			}
+			if first == nil {
+				first = song.Tracks[0].Notes
+				continue
+			}
+			for j := range first {
+				if song.Tracks[0].Notes[j] != first[j] {
+					t.Fatalf("run %d note %d = %+v, first run had %+v", i, j, song.Tracks[0].Notes[j], first[j])
+				}
+			}
+		}
+	})
 }

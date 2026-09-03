@@ -85,9 +85,8 @@ const (
 // goroutine, not on the audio callback: Write does real work, and the callback
 // must only ever move bytes.
 type WSOLA struct {
-	channels   int
-	sampleRate int
-	rate       float64
+	channels int
+	rate     float64
 
 	frame     int // synthesis segment length, in frames
 	hop       int // synthesis hop and overlap length, frame/2
@@ -158,16 +157,15 @@ func New(channels, sampleRate int) *WSOLA {
 	}
 
 	w := &WSOLA{
-		channels:   channels,
-		sampleRate: sampleRate,
-		rate:       1,
-		frame:      frame,
-		hop:        frame / 2,
-		tolerance:  tolerance,
-		stride:     defaultStride,
-		window:     make([]float32, frame),
-		acc:        make([]float32, frame*channels),
-		bypassing:  true,
+		channels:  channels,
+		rate:      1,
+		frame:     frame,
+		hop:       frame / 2,
+		tolerance: tolerance,
+		stride:    defaultStride,
+		window:    make([]float32, frame),
+		acc:       make([]float32, frame*channels),
+		bypassing: true,
 	}
 	for i := range w.window {
 		w.window[i] = float32(0.5 - 0.5*math.Cos(2*math.Pi*float64(i)/float64(frame)))
@@ -205,9 +203,11 @@ func (w *WSOLA) SetRate(rate float64) {
 }
 
 // Rate is the current playback rate.
-func (w *WSOLA) Rate() float64 { return w.rate }
 
 // Channels is the interleave width the filter expects and produces.
+// Rate reports the clamped playback rate actually in force.
+func (w *WSOLA) Rate() float64 { return w.rate }
+
 func (w *WSOLA) Channels() int { return w.channels }
 
 // Latency is how many input frames must be written past a point before the

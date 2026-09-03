@@ -88,15 +88,18 @@ func TestDuplexStreamDrivesTheClock(t *testing.T) {
 	host := openTestHost(t)
 	clock := practice.Clock{SampleRate: hwRate}
 
-	// Two seconds of a quiet tone as the backing track, so the output is doing
-	// real work rather than pushing zeros.
-	backing := make([]float32, hwRate*2*2)
-	for i := 0; i < hwRate*2; i++ {
+	// Six seconds of a quiet tone as the backing track, so the output is doing
+	// real work rather than pushing zeros — and so the measurement window
+	// stays well inside the song. Running past the end measures the transport
+	// stopping, not the clock drifting.
+	const songSeconds = 6
+	backing := make([]float32, hwRate*songSeconds*2)
+	for i := 0; i < hwRate*songSeconds; i++ {
 		v := float32(0.05 * math.Sin(2*math.Pi*220*float64(i)/hwRate))
 		backing[i*2], backing[i*2+1] = v, v
 	}
 
-	player := NewPlayer(clock, practice.Frame(hwRate*2))
+	player := NewPlayer(clock, practice.Frame(hwRate*songSeconds))
 	det := dsp.NewDetector(hwRate)
 
 	engine, err := Open(host, Config{
@@ -133,9 +136,13 @@ func TestDuplexStreamDrivesTheClock(t *testing.T) {
 		}
 	}
 
+	// The window is three seconds because the measurement is quantised: the
+	// position only moves when a callback fires, so each end of it carries up
+	// to one device period of error — 21 ms on JACK, which is 2% of a single
+	// second and 0.7% of three.
 	poll(300 * time.Millisecond)
 	t0, p0 := time.Now(), player.Position()
-	poll(1000 * time.Millisecond)
+	poll(3000 * time.Millisecond)
 	t1, p1 := time.Now(), player.Position()
 
 	real := t1.Sub(t0).Seconds()
@@ -146,7 +153,7 @@ func TestDuplexStreamDrivesTheClock(t *testing.T) {
 	if p0 <= 0 {
 		t.Fatal("the song did not advance; the device is not driving the clock")
 	}
-	if ratio := moved / real; ratio < 0.99 || ratio > 1.01 {
+	if ratio := moved / real; ratio < 0.985 || ratio > 1.015 {
 		t.Fatalf("the song moved at %.4f times real time: the clocks are drifting apart", ratio)
 	}
 	if engine.StreamPosition() == 0 {
@@ -232,5 +239,79 @@ func TestPausedCaptureMapsToNothing(t *testing.T) {
 	}
 	if got := player.Position(); got != 0 {
 		t.Fatalf("the playhead moved to %d while paused", got)
+	}
+}
+
+// TestLoopWrapsOnTheDeviceClock is the fix for the bug that inverted the
+// progressive practice rule, checked against a real device rather than a
+// simulated one: the lap must be counted with the playhead already back
+// inside the region, not while it is still approaching the end.
+func TestLoopWrapsOnTheDeviceClock(t *testing.T) {
+	host := openTestHost(t)
+	clock := practice.Clock{SampleRate: hwRate}
+
+	backing := make([]float32, hwRate*4*2)
+	for i := 0; i < hwRate*4; i++ {
+		v := float32(0.05 * math.Sin(2*math.Pi*220*float64(i)/hwRate))
+		backing[i*2], backing[i*2+1] = v, v
+	}
+
+	player := NewPlayer(clock, practice.Frame(hwRate*4))
+	det := dsp.NewDetector(hwRate)
+
+	engine, err := Open(host, Config{
+		SampleRate: hwRate,
+		Capture:    true,
+		Playback:   true,
+		Backing:    backing,
+		Volume:     0.15,
+	}, player, det)
+	if err != nil {
+		t.Skipf("could not open a duplex device: %v", err)
+	}
+	defer engine.Close()
+	if err := engine.Start(); err != nil {
+		t.Skipf("could not start the device: %v", err)
+	}
+
+	a := practice.Frame(hwRate / 2)
+	b := a + practice.Frame(hwRate*3/10) // a 300 ms region
+	player.SetLoop(practice.Loop{A: a, B: b, Enabled: true})
+	player.Restart()
+	player.Play()
+
+	// Sample the way the game loop does, and record where the playhead was on
+	// the turn each new lap appeared.
+	var seenAt []practice.Frame
+	laps := player.Laps()
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if n := player.Laps(); n != laps {
+			laps = n
+			seenAt = append(seenAt, player.Position())
+		}
+		det.Poll(player.Position())
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	t.Logf("%d laps of a %.0f ms region; positions seen at %v",
+		len(seenAt), clock.Seconds(b-a)*1000, seenAt)
+
+	if len(seenAt) < 3 {
+		t.Fatalf("only %d laps in 1.5 s of a 300 ms region", len(seenAt))
+	}
+	for i, pos := range seenAt {
+		if pos < a || pos >= b {
+			t.Fatalf("lap %d was counted at %d, outside the region [%d,%d)", i+1, pos, a, b)
+		}
+		// The lap has to be visible while the playhead is near the top of the
+		// region. Seeing it near the end means it was counted by whatever runs
+		// ahead of the device, and the scoreboard would reset too early.
+		if past := pos - a; past > (b-a)/2 {
+			t.Fatalf("lap %d was counted %d frames into the region, over halfway", i+1, past)
+		}
+	}
+	if engine.Underruns() > 0 {
+		t.Errorf("%d underruns", engine.Underruns())
 	}
 }

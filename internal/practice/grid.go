@@ -76,6 +76,49 @@ func BuildGrid(clock Clock, start Frame, sections []Section) Grid {
 	return grid
 }
 
+// BarSpec is one bar placed by whoever already knows exactly where it goes.
+type BarSpec struct {
+	Start Frame
+	End   Frame
+	Sig   TimeSignature
+	BPM   float64
+}
+
+// GridFrom builds a grid from bars that have already been placed.
+//
+// BuildGrid lays sections end to end from a starting frame, which is right
+// when the caller knows the tempo but not the absolute positions. An importer
+// with a tempo map knows the positions exactly, and going through sections
+// throws that away: a tempo change part-way through a bar rounds the section's
+// bar count up, the next section starts late, and from then on the grid and
+// the notes describe different songs. The bar readout, A-B selection and the
+// song's own length all follow the grid, so all three go wrong together.
+//
+// Beats are spread evenly across each bar, which is exact for the constant
+// tempo a single bar almost always has.
+func GridFrom(specs []BarSpec) Grid {
+	grid := make(Grid, 0, len(specs))
+	for _, spec := range specs {
+		if spec.End <= spec.Start || !spec.Sig.valid() {
+			continue
+		}
+		beats := make([]Frame, spec.Sig.Beats)
+		span := spec.End - spec.Start
+		for i := range beats {
+			beats[i] = spec.Start + span*Frame(i)/Frame(spec.Sig.Beats)
+		}
+		grid = append(grid, Bar{
+			Number: len(grid) + 1,
+			Start:  spec.Start,
+			End:    spec.End,
+			Beats:  beats,
+			Sig:    spec.Sig,
+			BPM:    spec.BPM,
+		})
+	}
+	return grid
+}
+
 // End is the frame the last bar stops at.
 func (g Grid) End() Frame {
 	if len(g) == 0 {

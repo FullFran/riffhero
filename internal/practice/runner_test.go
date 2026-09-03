@@ -194,13 +194,15 @@ func TestRunnerLeavesSpeedAloneWhenNotAdaptive(t *testing.T) {
 type recordingExpecter struct {
 	calls  int
 	notes  []Note
+	strum  Frame
 	window Frame
 }
 
-func (e *recordingExpecter) Expect(notes []Note, tolerance Frame) {
+func (e *recordingExpecter) Expect(notes []Note, strum, window Frame) {
 	e.calls++
 	e.notes = notes
-	e.window = tolerance
+	e.strum = strum
+	e.window = window
 }
 
 func TestRunnerTellsTheDetectorWhatToExpect(t *testing.T) {
@@ -212,8 +214,19 @@ func TestRunnerTellsTheDetectorWhatToExpect(t *testing.T) {
 	if exp.calls != 1 || len(exp.notes) != len(song) {
 		t.Fatalf("after construction: %d calls, %d notes", exp.calls, len(exp.notes))
 	}
+	// Grouping uses the strum tolerance — at the Good window a sixteenth-note
+	// run at 150 BPM would be verified as a series of chords — while matching
+	// an attack to a chord uses the player's timing window.
+	want := testClock().Frames(DefaultStrumToleranceSeconds)
+	if exp.strum != want {
+		t.Fatalf("strum %d, want %d", exp.strum, want)
+	}
 	if exp.window != cfg.Session.Windows.Good {
-		t.Fatalf("tolerance %d, want the Good window %d", exp.window, cfg.Session.Windows.Good)
+		t.Fatalf("window %d, want the Good window %d", exp.window, cfg.Session.Windows.Good)
+	}
+	if exp.strum >= exp.window {
+		t.Fatalf("the strum tolerance (%d) must be well under the timing window (%d)",
+			exp.strum, exp.window)
 	}
 
 	r.SetLoop(Loop{A: song[4].Start, B: song[8].Start, Enabled: true})
@@ -237,5 +250,184 @@ func TestRunnerRestartClearsTheScoreboard(t *testing.T) {
 	}
 	if tr.Position() != 0 {
 		t.Fatalf("the playhead is at %d after a restart", tr.Position())
+	}
+}
+
+// loopingDetector replays the same performance every lap, which is what a
+// guitarist does and what a ScriptedDetector cannot: it emits each note once
+// and then goes silent, so a second lap would score zero for reasons that have
+// nothing to do with the code under test.
+type loopingDetector struct {
+	events []DetectedNote
+	loop   Loop
+	sent   map[int]bool
+	lap    int
+}
+
+func newLoopingDetector(events []DetectedNote, loop Loop) *loopingDetector {
+	return &loopingDetector{events: events, loop: loop, sent: map[int]bool{}}
+}
+
+func (d *loopingDetector) Poll(upTo Frame) []DetectedNote {
+	var out []DetectedNote
+	for i, e := range d.events {
+		if d.sent[i] || e.Onset > upTo {
+			continue
+		}
+		d.sent[i] = true
+		out = append(out, e)
+	}
+	// A wrap is the playhead going backwards, the same signal the audio engine
+	// uses; from here it shows up as upTo dropping below what was already sent.
+	if d.loop.Active() && upTo < d.loop.A+(d.loop.B-d.loop.A)/4 && len(d.sent) == len(d.events) {
+		d.sent = map[int]bool{}
+		d.lap++
+	}
+	return out
+}
+
+func TestRunnerEveryLapCanStillScore(t *testing.T) {
+	// Multi-lap scoring, which is the whole point of an A-B region. A
+	// Transport moves its position and its lap count in the same call, so this
+	// cannot reproduce the ordering bug the audio engine had — that one is
+	// pinned in internal/audio, where the two came from different threads.
+	// What this covers is everything above the playhead: the reset, the
+	// rebaseline, and the scoreboard being usable again on the next lap.
+	tr, song, cfg := runnerFixture(t)
+	loop := Loop{A: song[0].Start, B: song[4].Start, Enabled: true}
+
+	det := newLoopingDetector(Perform(song[:4], nil), loop)
+	r := NewRunner(tr, det, cfg)
+	r.SetLoop(loop)
+	tr.Seek(loop.A)
+	tr.Play()
+
+	var laps []SessionStats
+	for i := 0; i < 12*60; i++ {
+		tr.AdvanceSeconds(1.0 / 60)
+		if u := r.Update(); u.LapDone {
+			laps = append(laps, u.LapStats)
+		}
+	}
+
+	if len(laps) < 3 {
+		t.Fatalf("only %d laps completed", len(laps))
+	}
+	for i, st := range laps {
+		if st.Accuracy < 1 {
+			t.Fatalf("lap %d scored %.0f%% (%+v); a clean performance must score on every lap",
+				i+1, st.Accuracy*100, st)
+		}
+	}
+}
+
+func TestRunnerSeekingForwardDoesNotMissTheNotesJumpedOver(t *testing.T) {
+	// Right-arrow past an intro, or End, used to resolve every note behind the
+	// new position as a miss. The player was never given a chance at them.
+	tr, song, cfg := runnerFixture(t)
+	r := NewRunner(tr, NewScriptedDetector(nil), cfg)
+
+	r.Seek(song[len(song)-1].Start)
+	r.Update()
+
+	if got := r.Session().Stats().Miss; got != 0 {
+		t.Fatalf("a seek scored %d misses", got)
+	}
+	if got := r.Session().Stats().Resolved; got != 0 {
+		t.Fatalf("a seek resolved %d notes", got)
+	}
+}
+
+func TestRunnerStillMissesWhatWasPlayedThrough(t *testing.T) {
+	// The other half of the same rule: notes the playhead genuinely passed
+	// over, with the player silent, are still misses.
+	tr, song, cfg := runnerFixture(t)
+	r := NewRunner(tr, NewScriptedDetector(nil), cfg)
+	tr.Play()
+
+	run(tr, r, 14)
+
+	st := r.Session().Stats()
+	if st.Miss != len(song) {
+		t.Fatalf("playing the whole song silently scored %d misses out of %d", st.Miss, len(song))
+	}
+}
+
+func TestRunnerRestartRebaselines(t *testing.T) {
+	// Restart goes back to the start, so nothing behind the playhead should be
+	// carried forward as a miss either.
+	tr, song, cfg := runnerFixture(t)
+	r := NewRunner(tr, NewScriptedDetector(nil), cfg)
+	tr.Play()
+	run(tr, r, 5)
+
+	r.Restart()
+	r.Update()
+	if got := r.Session().Stats().Resolved; got != 0 {
+		t.Fatalf("%d notes resolved right after a restart", got)
+	}
+	_ = song
+}
+
+func TestSessionResumeFromProtectsOnlyWhatWasSkipped(t *testing.T) {
+	clock := testClock()
+	notes := []Note{{Start: 1000, Duration: 100, MIDI: 60}, {Start: 100000, Duration: 100, MIDI: 60}}
+	s := NewSession(notes, SessionConfig{Windows: TimingWindows{Perfect: 100, Good: clock.Frames(0.1)}})
+
+	// Jumped over: the first note's window closed before the playhead arrived.
+	s.ResumeFrom(50000)
+	s.Advance(150000)
+
+	st := s.Stats()
+	if st.Miss != 1 {
+		t.Fatalf("miss %d, want only the note actually played through", st.Miss)
+	}
+	if s.Since() != 50000 {
+		t.Fatalf("since %d", s.Since())
+	}
+}
+
+func TestFastRunIsNotMistakenForChords(t *testing.T) {
+	// Sixteenths at 150 BPM are 100 ms apart, comfortably inside the Good
+	// window. Grouping by that window turned the run into a series of
+	// two-note chords, each verified over a 171 ms window and stamped at one
+	// position.
+	clock := testClock()
+	step := clock.Frames(0.100)
+
+	notes := make([]Note, 16)
+	for i := range notes {
+		notes[i] = Note{Start: Frame(i) * step, Duration: step, MIDI: uint8(60 + i%5)}
+	}
+
+	tr := NewTransport(clock, SongEnd(notes))
+	exp := &recordingExpecter{}
+	NewRunner(tr, NewScriptedDetector(nil), RunnerConfig{
+		Notes:    notes,
+		Session:  SessionConfig{Windows: TimingWindows{Perfect: clock.Frames(0.05), Good: clock.Frames(0.11)}},
+		Expecter: exp,
+	})
+
+	for _, e := range Events(exp.notes, exp.strum) {
+		if len(e.Notes) > 1 {
+			t.Fatalf("a run 100 ms apart was grouped into an event of %d notes", len(e.Notes))
+		}
+	}
+}
+
+func TestARealStrumIsStillOneEvent(t *testing.T) {
+	// The other side of the same number: a pick crossing six strings spreads
+	// them over a few milliseconds and that is one chord, not six notes.
+	clock := testClock()
+	spread := clock.Frames(0.004)
+
+	notes := make([]Note, 6)
+	for i := range notes {
+		notes[i] = Note{Start: Frame(i) * spread, Duration: clock.Frames(1), MIDI: uint8(40 + i*5)}
+	}
+
+	events := Events(notes, clock.Frames(DefaultStrumToleranceSeconds))
+	if len(events) != 1 || len(events[0].Notes) != 6 {
+		t.Fatalf("got %d events; a strum is one", len(events))
 	}
 }

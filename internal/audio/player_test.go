@@ -152,11 +152,54 @@ func TestPlayerTogglePlay(t *testing.T) {
 	}
 }
 
-func TestPlayerCountsLaps(t *testing.T) {
+func TestPlayerCountsALapWhenThePlayheadWraps(t *testing.T) {
+	// The lap belongs to what was heard, not to what the renderer produced.
+	// The renderer is a whole output buffer ahead — counting there resets the
+	// scoreboard while the playhead is still short of B, and the scoring
+	// session then expires the entire fresh lap as misses.
 	p := testPlayer()
-	p.countLap()
-	p.countLap()
-	if got := p.Laps(); got != 2 {
-		t.Fatalf("laps %d, want 2", got)
+	p.SetLoop(practice.Loop{A: 1000, B: 5000, Enabled: true})
+	gen := p.SeekGeneration()
+
+	for _, pos := range []int64{1000, 3000, 4990} {
+		p.observe(stamp{pos: pos, gen: gen})
+	}
+	if got := p.Laps(); got != 0 {
+		t.Fatalf("laps %d before wrapping", got)
+	}
+
+	p.observe(stamp{pos: 1010, gen: gen}) // the wrap
+	if got := p.Laps(); got != 1 {
+		t.Fatalf("laps %d after the wrap, want 1", got)
+	}
+	if got := p.Position(); got != 1010 {
+		t.Fatalf("position %d, want the wrapped position", got)
+	}
+}
+
+func TestPlayerDoesNotCountASeekAsALap(t *testing.T) {
+	// A jump moves the position backwards exactly like a wrap does. The
+	// generation is what separates them.
+	p := testPlayer()
+	p.SetLoop(practice.Loop{A: 1000, B: 5000, Enabled: true})
+	p.observe(stamp{pos: 4000, gen: p.SeekGeneration()})
+
+	p.Seek(1000)
+	p.observe(stamp{pos: 1000, gen: p.SeekGeneration()})
+
+	if got := p.Laps(); got != 0 {
+		t.Fatalf("a seek counted %d laps", got)
+	}
+}
+
+func TestPlayerCountsNoLapWithoutALoop(t *testing.T) {
+	// Without a region there is nothing to lap, and a position that went
+	// backwards is a bug somewhere else rather than a repetition.
+	p := testPlayer()
+	gen := p.SeekGeneration()
+	p.observe(stamp{pos: 5000, gen: gen})
+	p.observe(stamp{pos: 100, gen: gen})
+	if got := p.Laps(); got != 0 {
+		t.Fatalf("laps %d without a loop", got)
 	}
 }

@@ -59,6 +59,11 @@ type Session struct {
 	last  Rating
 	// lastSet distinguishes "no rating yet" from "the last rating was Miss".
 	lastSet bool
+
+	// since is the earliest position the playhead is known to have played
+	// through continuously. Notes whose window closed before it were never put
+	// in front of the player, so they are not misses.
+	since Frame
 }
 
 func NewSession(notes []Note, cfg SessionConfig) *Session {
@@ -125,17 +130,40 @@ func (s *Session) candidate(d DetectedNote) int {
 	return best
 }
 
-// Advance expires every unresolved note the playhead has left behind.
+// Advance expires every unresolved note the playhead has played through.
+//
+// "Played through" and "is now behind" are not the same thing, and treating
+// them as one was a real bug: seeking past an intro, pressing End, or changing
+// track mid-song resolved every note jumped over as a miss, destroying the
+// scoreboard for something the player was never given a chance to play. The
+// caller says where a jump landed with ResumeFrom, and anything whose window
+// closed before that is left alone.
 func (s *Session) Advance(pos Frame) {
 	for i := range s.notes {
 		if s.states[i].resolved {
 			continue
 		}
-		if pos > s.notes[i].Start+s.cfg.Windows.Good {
+		deadline := s.notes[i].Start + s.cfg.Windows.Good
+		if deadline < s.since {
+			continue
+		}
+		if pos > deadline {
 			s.resolve(i, Miss)
 		}
 	}
 }
+
+// ResumeFrom tells the session the playhead arrived at pos without playing the
+// music in between — a seek, or a lap of the A-B region.
+func (s *Session) ResumeFrom(pos Frame) {
+	if pos < 0 {
+		pos = 0
+	}
+	s.since = pos
+}
+
+// Since is the position the current stretch of playing began at.
+func (s *Session) Since() Frame { return s.since }
 
 func (s *Session) resolve(i int, rating Rating) {
 	s.states[i] = noteState{resolved: true, rating: rating}
@@ -189,6 +217,7 @@ func (s *Session) Reset() {
 	}
 	s.stats = SessionStats{Total: len(s.notes)}
 	s.last, s.lastSet = Miss, false
+	s.since = 0
 }
 
 // NextExpected returns the first unresolved note starting at or after from,

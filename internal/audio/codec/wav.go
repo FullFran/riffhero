@@ -113,6 +113,11 @@ chunks:
 	if err != nil {
 		return nil, err
 	}
+	// The rate comes straight out of the file's header and every conversion
+	// downstream divides by it. See ValidSampleRate.
+	if rate := sampleRate; !ValidSampleRate(rate) {
+		return nil, fmt.Errorf("sample rate %d is outside %d-%d Hz", rate, MinSampleRate, MaxSampleRate)
+	}
 	return &PCM{SampleRate: sampleRate, Channels: channels, Data: samples}, nil
 }
 

@@ -7,10 +7,16 @@ import (
 	"github.com/FullFran/riffhero/internal/practice"
 )
 
-// maxImportFret bounds what is accepted as a fret number. Fret is a uint8 in
-// the domain model, so an out-of-range value in a corrupt file would wrap into
-// a plausible-looking note instead of being noticed.
-const maxImportFret = 99
+// maxImportFret bounds what is accepted as a fret number.
+//
+// Two reasons for the bound and one for its value. Fret is a uint8 in the
+// domain model, so an out-of-range value in a corrupt file would wrap into a
+// plausible-looking note instead of being noticed; and a note past the end of
+// the neck is not playable, so keeping it would put a position in the
+// tablature that no hand can reach. The value is the domain's own MaxFret,
+// which is also what every other importer places notes within — a score whose
+// tab and whose pitches disagree is worse than one missing a note.
+const maxImportFret = practice.MaxFret
 
 // builder holds everything the traversal needs: the parsed document, the id
 // tables, the expanded timeline, and the clock the frames are measured in.
@@ -77,6 +83,11 @@ type tieKey struct {
 
 // trackWalk is the state carried through one track's traversal: the notes
 // produced so far, and which of them a tie is still allowed to lengthen.
+//
+// held is the last note struck on each string, by index into notes. It is only
+// a candidate for a tie, never a promise: nothing clears it when the string
+// stops ringing, so every read has to check that the note it points at really
+// does end where the tie begins. See emitNote.
 type trackWalk struct {
 	index       int // position of the track in <Tracks>, which is how bars are addressed
 	stringCount int
@@ -178,14 +189,20 @@ func (b *builder) walkVoice(w *trackWalk, voice *voiceNode, voiceSlot, barPos in
 		// owns none of the bar's time. Playing it would push everything after
 		// it out of place, so it is dropped whole, before the cursor moves.
 		if strings.TrimSpace(beat.GraceNotes) != "" {
+			b.dropBeat(w, beat, voiceSlot)
 			continue
 		}
+		// A beat whose rhythm cannot be resolved is dropped the same way, and
+		// for the same reason it has to cut its ties: the cursor has not moved,
+		// so nothing downstream can tell that anything was lost here.
 		rhythm, ok := b.tab.rhythms[intOr(beat.Rhythm.Ref, -1)]
 		if !ok {
+			b.dropBeat(w, beat, voiceSlot)
 			continue
 		}
 		duration, ok := rhythm.quarters()
 		if !ok {
+			b.dropBeat(w, beat, voiceSlot)
 			continue
 		}
 
@@ -202,6 +219,30 @@ func (b *builder) walkVoice(w *trackWalk, voice *voiceNode, voiceSlot, barPos in
 	}
 }
 
+// dropBeat throws a beat away without advancing the cursor, cutting any tie
+// that could have started in it.
+//
+// The cursor not moving is exactly what makes this necessary. A beat that owns
+// no time leaves the note before it ending on the same frame the note after it
+// begins, so the adjacency test in emitNote cannot see that anything was lost
+// in between — and a grace-note-to-main-note tie, where the origin is the
+// ornament we just dropped, is ordinary guitar notation rather than a corrupt
+// file. Without this the main note is swallowed by whatever was last struck on
+// the string and never reaches the timeline.
+func (b *builder) dropBeat(w *trackWalk, beat *beatNode, voiceSlot int) {
+	for _, noteID := range parseIntList(beat.Notes) {
+		note, ok := b.tab.notes[noteID]
+		if !ok {
+			continue
+		}
+		// Only when the note says which string it was on; guessing would cut a
+		// tie on a string this beat never touched.
+		if gpifString, _, ok := note.fretPosition(); ok {
+			delete(w.held, tieKey{voice: voiceSlot, string: gpifString})
+		}
+	}
+}
+
 // emitNote turns one GPIF note into a domain note, or extends the note it is
 // tied to.
 func (b *builder) emitNote(w *trackWalk, note *noteNode, voiceSlot, barPos int, cursor, duration float64) {
@@ -215,25 +256,35 @@ func (b *builder) emitNote(w *trackWalk, note *noteNode, voiceSlot, barPos int, 
 	}
 
 	key := tieKey{voice: voiceSlot, string: gpifString}
+	start := b.frameAt(barPos, cursor)
 	end := b.frameAt(barPos, cursor+duration)
 
 	if note.tieDestination() {
-		if i, found := w.held[key]; found {
-			// The tie continues a note already on the timeline: lengthen it
-			// instead of striking the string again. The map keeps pointing at
-			// the head of the chain, so a note tied over three bars grows
-			// twice rather than splitting into two notes.
+		// A tie lengthens a note that is still sounding at this exact frame,
+		// which is why the frames are compared rather than just looked up.
+		//
+		// The map entry on its own proves nothing: it is the last note struck
+		// on this string in this voice, and it lives for the whole track. An
+		// origin is dropped for entirely ordinary reasons — a missing Fret or
+		// String property, a fret past the end of the neck, an unresolved
+		// rhythm, a grace beat — and the entry left behind is then some note
+		// from bars ago. Believing it stretches that old note across the gap
+		// and deletes the note actually written here; a whole note in bar 1
+		// came out eight bars long that way.
+		if i, found := w.held[key]; found && w.notes[i].Start+w.notes[i].Duration == start {
+			// The map keeps pointing at the head of the chain, so a note tied
+			// over three bars grows twice rather than splitting into two notes.
 			if d := end - w.notes[i].Start; d > w.notes[i].Duration {
 				w.notes[i].Duration = d
 			}
 			return
 		}
-		// A destination with no origin is a broken file. Playing it as a fresh
-		// note loses the tie but keeps the music; dropping it would leave a
-		// hole the player would be scored against.
+		// A destination with no live origin is a broken file, or a tie whose
+		// origin this importer could not keep. Playing it as a fresh note
+		// loses the tie but keeps the music; dropping it would leave a hole
+		// the player would be scored against.
 	}
 
-	start := b.frameAt(barPos, cursor)
 	w.notes = append(w.notes, practice.Note{
 		Start:    start,
 		Duration: end - start,
@@ -312,38 +363,12 @@ func trackTuning(tr *trackNode) (practice.Tuning, int, bool) {
 		// orders are reverses of each other.
 		t.Strings[len(pitches)-1-i] = uint8(pitch)
 	}
-	t.Name = tuningName(t, len(pitches))
+	// A track with fewer than six strings keeps the domain's six-slot array,
+	// so it can never match a known six-string tuning; Named spells it out
+	// instead, which is the right answer for a bass anyway.
+	t = t.Named()
 	return t, len(pitches), true
 }
-
-var knownTunings = []practice.Tuning{
-	practice.StandardTuning,
-	practice.DropDTuning,
-	practice.HalfStepDown,
-}
-
-// tuningName labels a recovered tuning, preferring the name the domain already
-// uses so the HUD does not show "E A D G B E" next to a preset called
-// "Standard".
-func tuningName(t practice.Tuning, stringCount int) string {
-	if stringCount == 6 {
-		for _, known := range knownTunings {
-			if known.Strings == t.Strings {
-				return known.Name
-			}
-		}
-	}
-	// Spelled low to high, the way a guitarist reads a tuning off a headstock.
-	names := make([]string, 0, stringCount)
-	for i := stringCount - 1; i >= 0; i-- {
-		names = append(names, pitchClassName(t.Strings[i]))
-	}
-	return strings.Join(names, " ")
-}
-
-var pitchClassNames = [12]string{"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
-
-func pitchClassName(midi uint8) string { return pitchClassNames[midi%12] }
 
 // trackInstrument picks the most specific instrument label the file offers.
 // The sound name is the closest thing to what the part actually is; the track

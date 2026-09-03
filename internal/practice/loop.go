@@ -35,7 +35,7 @@ func (l Loop) Step(pos, n Frame) (next Frame, laps int) {
 		return next, 0
 	}
 	// Everything from B onwards folds back into [A,B).
-	length := l.B - l.A
+	length := l.Length()
 	over := next - l.B
 	laps = 1 + int(over/length)
 	return l.A + over%length, laps

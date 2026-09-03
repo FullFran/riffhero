@@ -1,5 +1,14 @@
 // Package musicxml imports MusicXML scores — raw score-partwise XML or a
 // zipped .mxl container — into RiffHero's normalized practice.Song model.
+//
+// Repeats are expanded at import, as docs/architecture.md requires: forward
+// and backward repeat signs, their times attribute, and numbered alternate
+// endings are all unrolled into the linear measure sequence a practice
+// timeline needs. Direction jumps are not: a score marked D.C., D.S., To Coda
+// or Fine is played straight through, the same choice the gp importer makes
+// and for the same reason — a jump reproduced subtly wrong misaligns every
+// note after it, silently, whereas playing straight through is wrong where the
+// player can see it and loop the section by hand.
 package musicxml
 
 import (
@@ -20,6 +29,16 @@ import (
 // raw XML document without trusting a file extension that may not even
 // exist (Parse takes bytes, not a path).
 var zipMagic = []byte("PK\x03\x04")
+
+// maxScoreSize bounds how much XML is decompressed out of an .mxl container.
+// A ZIP entry declares its own uncompressed size and a crafted one can declare
+// a great deal of it: deflate reaches roughly 1000x, so a 255 KiB upload
+// unpacks to 256 MiB. A score is a few megabytes of text at the very worst.
+//
+// It is a var rather than a const only so the test can shrink it. Proving the
+// guard works by building a real 128 MiB bomb would cost more to run than the
+// guard costs to have.
+var maxScoreSize int64 = 128 << 20
 
 // Parse reads a MusicXML score held in memory. Both raw `score-partwise` XML
 // and a zipped `.mxl` container are accepted; the format is detected from the
@@ -106,9 +125,12 @@ func extractContainer(data []byte) ([]byte, error) {
 	}
 	defer f.Close()
 
-	raw, err := io.ReadAll(f)
+	raw, err := io.ReadAll(io.LimitReader(f, maxScoreSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("musicxml: read %s in .mxl: %w", name, err)
+	}
+	if int64(len(raw)) > maxScoreSize {
+		return nil, fmt.Errorf("musicxml: %s in .mxl is larger than %d bytes, which no real score is", name, maxScoreSize)
 	}
 	return raw, nil
 }
@@ -120,8 +142,10 @@ func rootfilePath(zr *zip.Reader) string {
 	}
 	defer f.Close()
 
+	// container.xml is a handful of lines, but it is a zip entry like any
+	// other and expands like one, so it is read under the same bound.
 	var c containerXML
-	if err := xml.NewDecoder(f).Decode(&c); err != nil {
+	if err := xml.NewDecoder(io.LimitReader(f, maxScoreSize+1)).Decode(&c); err != nil {
 		return ""
 	}
 	for _, rf := range c.Rootfiles.Rootfile {

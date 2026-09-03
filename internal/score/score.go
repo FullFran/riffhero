@@ -33,7 +33,7 @@ const (
 )
 
 // Extensions lists what Load will accept, for help text and file dialogs.
-var Extensions = []string{".gp", ".musicxml", ".mxl", ".xml", ".mid", ".midi"}
+var Extensions = []string{".gp", ".gpif", ".musicxml", ".mxl", ".xml", ".mid", ".midi"}
 
 // Load reads a score from disk.
 func Load(path string, clock practice.Clock) (*practice.Song, error) {
@@ -90,11 +90,17 @@ func Detect(data []byte, hint string) Format {
 		return FormatGuitarPro
 
 	case looksLikeXML(data):
+		// Both formats are XML, so "starts with a <" is not an answer. The
+		// root element is.
+		head := head(data, 4096)
+		if bytes.Contains(head, []byte("<GPIF")) {
+			return FormatGuitarPro
+		}
 		return FormatMusicXML
 	}
 
 	switch strings.ToLower(filepath.Ext(hint)) {
-	case ".gp", ".gpx", ".gp3", ".gp4", ".gp5":
+	case ".gp", ".gpif", ".gpx", ".gp3", ".gp4", ".gp5":
 		return FormatGuitarPro
 	case ".musicxml", ".mxl", ".xml":
 		return FormatMusicXML

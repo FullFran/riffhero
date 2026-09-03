@@ -1,7 +1,7 @@
 package midi
 
 import (
-	"math"
+	"fmt"
 	"sort"
 
 	"github.com/FullFran/riffhero/internal/practice"
@@ -145,59 +145,96 @@ func sigAt(changes []sigChange, tick int64) practice.TimeSignature {
 	return sig
 }
 
-// buildSections turns the song's tempo and time-signature maps into the runs
-// of bars practice.BuildGrid expects. A new section starts at every tick
-// where either map changes, and the final one is stretched to songEndTick so
-// the grid always covers the last note, rounding its bar count up rather
-// than down — a grid that stops one bar short of the last note is useless
-// for A-B looping or the HUD position readout, while a grid that runs a bar
-// long past it is merely unused space.
-func buildSections(clock practice.Clock, tc tickClock, tempoChanges []tempoChange, sigChanges []sigChange, songEndTick int64) []practice.Section {
-	breakpoints := []int64{0}
-	seen := map[int64]bool{0: true}
-	for _, c := range tempoChanges {
-		if !seen[c.tick] {
-			seen[c.tick] = true
-			breakpoints = append(breakpoints, c.tick)
-		}
-	}
-	for _, c := range sigChanges {
-		if !seen[c.tick] {
-			seen[c.tick] = true
-			breakpoints = append(breakpoints, c.tick)
-		}
-	}
-	sort.Slice(breakpoints, func(i, j int) bool { return breakpoints[i] < breakpoints[j] })
+// maxGridBars caps the number of bars a file may lay out. The count comes
+// straight from tick positions the file is free to invent, and every bar costs
+// a practice.Bar plus a slice of its beat frames: a 36-byte file declaring one
+// tick per quarter note and a Note Off two million ticks later asked for
+// 500,000 bars and 205 MiB of heap, and a single maximal variable-length delta
+// reaches ~67 million bars. Refusing with the limit in the message is the only
+// honest answer — nothing that large is a score anyone is going to practise.
+const maxGridBars = 20000
 
-	sections := make([]practice.Section, 0, len(breakpoints))
-	for i, tick := range breakpoints {
-		endTick := songEndTick
-		if i+1 < len(breakpoints) {
-			endTick = breakpoints[i+1]
+// ticksPerBar is the length of one bar of sig, measured in the file's own
+// ticks.
+//
+// Under a ticks-per-quarter division this is arithmetic on the meter alone: a
+// beat is a 1/Unit note, so a bar is Beats * 4/Unit quarter notes and the
+// tempo map has no say in it. Under SMPTE division there is no quarter note to
+// count — a tick is a fixed slice of a second — so the bar has to be measured
+// in real time at the tempo in force and converted back.
+func (c tickClock) ticksPerBar(sig practice.TimeSignature, micros uint32) int64 {
+	var ticks int64
+	if c.smpte {
+		bpm := 60000000.0 / float64(micros)
+		barSeconds := float64(sig.Beats) * 60.0 / bpm * 4.0 / float64(sig.Unit)
+		ticks = int64(barSeconds * c.ticksPerSecond)
+	} else {
+		ticks = int64(sig.Beats) * 4 * int64(c.ticksPerQuarter) / int64(sig.Unit)
+	}
+	if ticks < 1 {
+		// An exotic meter against a coarse division (5/64 at 24 ticks per
+		// quarter) rounds away to nothing. One tick per bar is musically
+		// meaningless, but it terminates, and the alternative is a loop that
+		// never advances.
+		return 1
+	}
+	return ticks
+}
+
+// buildGrid lays the song's bars out on the frame timeline, walking the song
+// one bar at a time in ticks and converting every boundary with the very same
+// tickClock that places the notes. That shared conversion is the whole point,
+// and practice.GridFrom exists to take bars already placed this way.
+//
+// The previous version cut the song into sections at every tempo and meter
+// change, rounded each section's bar count up, and handed the list to
+// practice.BuildGrid, which lays sections end to end from frame 0. The exact
+// tick position of each section was computed and then thrown away, so a tempo
+// change in the middle of a bar moved the grid without moving the notes. On a
+// file that slows down halfway through bar 1, the note sitting on the bar-2
+// downbeat landed at 180000 frames (3.750 s) while the grid put bar 2 at
+// 96000 (2.000 s) — 1.75 s out, and every later bar inherited the gap. The
+// bar/beat readout, A-B loop selection (Grid.Span and Grid.Snap both read off
+// this grid, so the loop the player asks for is not the bars they get) and
+// Song.End were all wrong together.
+//
+// Walking in ticks also stops tempo changes from manufacturing bars. An
+// accelerando exported as one Set Tempo per beat used to turn a 100-bar song
+// into a 400-bar grid, because every breakpoint rounded its own fragment of a
+// bar up to a whole one. Bars come from the meter now; tempo only decides how
+// long each one lasts.
+//
+// Only the bar boundaries are placed from the tempo map: GridFrom spreads the
+// beats evenly inside each bar, which is exact for every bar at one tempo and
+// an approximation for the rare bar a tempo change lands inside. Downbeats —
+// the thing loops and the bar readout are anchored to — stay exact either way.
+func buildGrid(clock practice.Clock, tc tickClock, tempoChanges []tempoChange, sigChanges []sigChange, songEndTick int64) (practice.Grid, error) {
+	var specs []practice.BarSpec
+
+	// The grid must reach the end of the song, so a bar is emitted for every
+	// tick position strictly before songEndTick and the last one is allowed to
+	// overhang: a grid stopping short of the final note is useless for looping
+	// and for the HUD, while a grid running a bar long is unused space. A song
+	// with nothing in it still gets one bar rather than an empty grid.
+	for tick := int64(0); tick < songEndTick || len(specs) == 0; {
+		if len(specs) >= maxGridBars {
+			return nil, fmt.Errorf("midi: the file lays out more than %d bars; its tick positions are not a score", maxGridBars)
 		}
 
-		bpm := 60000000.0 / float64(tempoAt(tempoChanges, tick))
+		micros := tempoAt(tempoChanges, tick)
 		sig := sigAt(sigChanges, tick)
+		barTicks := tc.ticksPerBar(sig, micros)
 
-		startFrame := tc.frame(clock, tick)
-		endFrame := tc.frame(clock, endTick)
-		duration := endFrame - startFrame
-
-		beatSeconds := 60.0 / bpm * 4.0 / float64(sig.Unit)
-		barFrames := clock.Frames(beatSeconds * float64(sig.Beats))
-
-		var bars int
-		switch {
-		case barFrames <= 0:
-			// A degenerate clock (SampleRate <= 0): leave bars at 0 so
-			// BuildGrid skips the section instead of dividing by zero.
-		case duration > 0:
-			bars = int(math.Ceil(float64(duration) / float64(barFrames)))
-		default:
-			bars = 1
-		}
-
-		sections = append(sections, practice.Section{BPM: bpm, Sig: sig, Bars: bars})
+		specs = append(specs, practice.BarSpec{
+			Start: tc.frame(clock, tick),
+			End:   tc.frame(clock, tick+barTicks),
+			Sig:   sig,
+			// The BPM in force at the downbeat. A bar that accelerates through
+			// its own length has no single tempo to report, and the downbeat's
+			// is the one a player would name.
+			BPM: 60000000.0 / float64(micros),
+		})
+		tick += barTicks
 	}
-	return sections
+	return practice.GridFrom(specs), nil
 }

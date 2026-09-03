@@ -167,7 +167,8 @@ func (f *FFT) Magnitudes(buf []float32, mag []float64) {
 	mag[half] = math.Abs(f.re[half]) * f.winScale
 }
 
-// HannWindow returns the window this uses, for callers that need to match it.
+// HannWindow returns the window Magnitudes applies, which is also what the
+// constructor precomputes.
 //
 // It is the periodic form, w[i] = 0.5*(1 - cos(2*pi*i/n)), not the symmetric
 // one that divides by n-1. The DFT treats the buffer as one period of an
