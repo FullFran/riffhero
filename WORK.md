@@ -123,7 +123,25 @@ Timing, from an adversarial review of the finished app:
 - the tablature and the pitch of a note must agree. Two importers could produce
   one that disagreed, and the player can satisfy neither.
 
-The interface, found by walking the screens rather than reading the code:
+The interface, found by walking the screens and by an adversarial review:
+
+- **Ebiten's debug font is a 32-by-8 atlas of the first 256 code points.**
+  Anything past U+00FF draws nothing at all and still advances the cursor, so
+  an em dash is a hole in the line and an ellipsis is three. Every string that
+  reaches the screen has to stay inside Latin-1; a test walks the source to
+  keep it that way;
+- **the playhead must stop when a menu opens.** Only the title paused, so
+  twenty seconds spent adjusting a setting walked the scoreboard through the
+  song resolving every note as a miss — and with the progressive rule on, took
+  the speed down a step per lap. The *audio* keeps running: the meters exist to
+  be watched while playing;
+- a melody is placed in a hand **position**, not near the last fret. Following
+  the last fret means a scale never leaves the string it started on, because
+  the next note is always two frets away there and four or five on the next
+  string;
+- the speed and the region go on the playhead **before** the device opens. The
+  renderer fills its whole ring within milliseconds, so anything applied
+  afterwards leaves 85 ms of the wrong bar at the wrong speed queued to play;
 
 - a line of explanation drawn *between* two buttons is painted over by the
   second one. Draw all the buttons, then all the notes;

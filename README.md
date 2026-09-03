@@ -125,6 +125,7 @@ everywhere the keyboard does. While playing:
 | `-` `=` | backing track quieter / louder |
 | `M` | guitar monitoring level |
 | `TAB` | next track |
+| `C` | which input the guitar is on (device screen) |
 | `N` | tablature / notation / both |
 | `S` | settings |
 | `H` | help |
