@@ -179,7 +179,8 @@ On the development machine (Pop!_OS, PipeWire 1.0.3, built-in audio):
 
 | | |
 | --- | --- |
-| Clock drift over a second of duplex playback | 0.998x, 0 underruns, 0 dropped |
+| Clock drift over three seconds of duplex playback | 0.9966x, 0 underruns, 0 dropped |
+| A-B lap counted, relative to the wrap | within 5 ms |
 | Round trip, digital loopback | 40–43 ms at 87% confidence, ±3 ms |
 | Round trip, speaker to microphone | 101–123 ms at 43–49% confidence |
 | Live detection from the room | a 1200 Hz click read as D6 +36¢ |

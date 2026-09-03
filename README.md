@@ -24,8 +24,8 @@ accuracy 93%    combo x24    speed 0.75x    loop bars 9-12
 ## What works
 
 - **Real guitar in.** One duplex stream, so what you hear and what the scorer
-  sees run on the same clock — measured at 0.998x of real time with no
-  underruns and nothing dropped.
+  sees run on the same clock — measured at 0.9966x of real time over three
+  seconds, with no underruns and nothing dropped.
 - **Monophonic detection** with McLeod's method cross-checked against YIN, an
   onset detector that back-dates the attack, and a stability quorum so the
   score never sees a note you did not play. 65 ms of analysis latency.

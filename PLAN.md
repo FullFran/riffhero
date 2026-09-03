@@ -111,8 +111,9 @@ Goal: what you hear and what the scorer sees use the same clock.
 
 Exit criterion: backing loop remains sample-accurate enough that repeated scoring does not drift.
 
-Status: met, measured. Over a second of playback on PipeWire the song advances
-0.998x of real time, with no underruns and no dropped input. The clock is the
+Status: met, measured. Over three seconds of playback on PipeWire the song
+advances 0.9966x of real time, with no underruns and no dropped input, and
+every lap of an A-B region is counted within 5 ms of the wrap. The clock is the
 device's: the callback moves the playhead from the position stamped on the last
 frame it actually handed over, so a starved renderer stalls the score instead
 of letting it run ahead of the sound.
