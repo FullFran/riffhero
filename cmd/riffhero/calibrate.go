@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -129,6 +130,27 @@ func (a *app) finishCalibration(out calibOutcome) {
 	}
 }
 
+// waitForCalibration blocks until a measurement in flight has finished with
+// the device.
+//
+// The measurement runs on its own goroutine and holds the audio host. Closing
+// the app while it runs — the window's own close button is always there, and
+// the screen deliberately ignores ESC — would free the context out from under
+// it. The channel is buffered, so the goroutine cannot be left blocked on a
+// send nobody is reading.
+func (a *app) waitForCalibration() {
+	if !a.calib.running {
+		return
+	}
+	select {
+	case <-a.calib.ch:
+	case <-time.After(15 * time.Second):
+		// Long past anything the measurement should take. Carrying on is worse
+		// than leaking a goroutine that is about to end anyway.
+	}
+	a.calib.running = false
+}
+
 func (a *app) acceptCalibration() {
 	r := a.calib.result
 	a.cfg.SetLatency(r.Frames, r.SampleRate)
@@ -145,9 +167,10 @@ var calibrationHelp = []string{
 	"The gap is the round trip: your output buffer, the converter, the cable",
 	"or the air, and the input buffer.",
 	"",
-	"The clean way is a loop: patch the output back into the input, or pick",
-	"your card's own monitor as the input. Played out loud into a microphone",
-	"it also works, less precisely, and includes the speaker and the room.",
+	"The clean way is a loop: run a cable from the headphone or line output",
+	"back into an input, or pick your card's own monitor as the input.",
+	"Played out loud into a microphone it also works, less precisely, and",
+	"includes the speaker and the room along with the buffers.",
 	"",
 	"It takes about five seconds. Keep the room quiet.",
 }
