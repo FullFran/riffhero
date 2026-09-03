@@ -174,3 +174,51 @@ func TestLocateReportsBarAndBeat(t *testing.T) {
 		}
 	}
 }
+
+func TestGridFromPlacesBarsExactlyWhereItIsTold(t *testing.T) {
+	// The case BuildGrid cannot express: a tempo change part-way through bar 1,
+	// so bar 2 does not start where laying equal sections end to end would put
+	// it. An importer with a tempo map knows the real frames.
+	grid := GridFrom([]BarSpec{
+		{Start: 0, End: 96000, Sig: CommonTime, BPM: 120},
+		{Start: 96000, End: 180000, Sig: CommonTime, BPM: 90},
+		{Start: 180000, End: 244000, Sig: TimeSignature{Beats: 3, Unit: 4}, BPM: 90},
+	})
+
+	if len(grid) != 3 {
+		t.Fatalf("got %d bars, want 3", len(grid))
+	}
+	for i, want := range []Frame{0, 96000, 180000} {
+		if grid[i].Start != want {
+			t.Fatalf("bar %d starts at %d, want %d", i+1, grid[i].Start, want)
+		}
+		if grid[i].Number != i+1 {
+			t.Fatalf("bar at index %d is numbered %d", i, grid[i].Number)
+		}
+	}
+	if len(grid[2].Beats) != 3 {
+		t.Fatalf("the 3/4 bar has %d beats", len(grid[2].Beats))
+	}
+	// Beats are spread across the bar the caller gave, not across a nominal one.
+	if got, want := grid[1].Beats[2], Frame(96000+(180000-96000)*2/4); got != want {
+		t.Fatalf("third beat of bar 2 at %d, want %d", got, want)
+	}
+}
+
+func TestGridFromSkipsBarsThatMakeNoSense(t *testing.T) {
+	grid := GridFrom([]BarSpec{
+		{Start: 100, End: 100, Sig: CommonTime, BPM: 120},     // zero length
+		{Start: 200, End: 100, Sig: CommonTime, BPM: 120},     // backwards
+		{Start: 0, End: 1000, Sig: TimeSignature{}, BPM: 120}, // no meter
+		{Start: 0, End: 1000, Sig: CommonTime, BPM: 120},
+	})
+	if len(grid) != 1 || grid[0].Number != 1 {
+		t.Fatalf("got %+v, want one bar numbered 1", grid)
+	}
+}
+
+func TestGridFromNothing(t *testing.T) {
+	if got := GridFrom(nil); len(got) != 0 {
+		t.Fatalf("got %+v", got)
+	}
+}
