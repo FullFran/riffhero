@@ -305,6 +305,10 @@ func (a *app) note(text string) {
 
 // Close releases the device and the backend.
 func (a *app) Close() {
+	// A measurement in flight is holding the host. Freeing the context under
+	// it is a use-after-free in C, and the window's close button is always
+	// there even on the screen that ignores every key.
+	a.waitForCalibration()
 	a.closeStream()
 	if a.host != nil {
 		_ = a.host.Close()

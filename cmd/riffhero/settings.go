@@ -145,7 +145,7 @@ var settingRows = []settingRow{
 		label: "GUITAR MONITOR", key: "8", kind: settingStep,
 		value: func(a *app) string { return percent(a.monitorSetting()) },
 		note: func(a *app) string {
-			return "mixes the guitar into the output; leave off if you have an amp"
+			return "mixes the guitar into the output; leave off with an amp, or with direct monitoring on the interface"
 		},
 		off:   func(a *app) bool { return a.engine == nil },
 		less:  func(a *app) { a.nudgeMonitor(-monitorStep) },
