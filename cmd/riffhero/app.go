@@ -58,6 +58,7 @@ type app struct {
 	// left once the staff has had its share.
 	layout ui.Layout
 	tab    ui.Layout
+	staff  ui.StaffLayout
 
 	width, height int
 

@@ -68,14 +68,16 @@ type browseRow struct {
 func (a *app) browseRows() []browseRow {
 	out := make([]browseRow, 0, len(a.browse.listing.Entries)+len(a.browse.places)+1)
 
+	// Up first, then the shortcuts. It is the one most often wanted and the
+	// one every other file browser puts at the top.
+	if parent := a.browse.listing.Parent; parent != "" {
+		out = append(out, browseRow{label: "..", note: "up", dir: parent})
+	}
 	for _, p := range a.browse.places {
 		if p.Path == a.browse.dir {
 			continue
 		}
 		out = append(out, browseRow{label: p.Name, note: "place", dir: p.Path})
-	}
-	if parent := a.browse.listing.Parent; parent != "" {
-		out = append(out, browseRow{label: "..", note: "up", dir: parent})
 	}
 	for _, e := range a.browse.listing.Entries {
 		if e.IsDir {

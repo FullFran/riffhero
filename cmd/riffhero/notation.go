@@ -20,10 +20,13 @@ import (
 
 // staffFor is the five-line staff placed inside a vertical band.
 func staffFor(top, bottom float64) ui.StaffLayout {
-	gap := (bottom - top) / 4
+	// Divided by ten rather than by four: the staff is five lines, but the
+	// music runs several ledger lines either side of them and needs the room.
+	// A guitar's low E is three below and this phrase goes two above.
+	gap := (bottom - top) / 10
 	switch {
-	case gap > 15:
-		gap = 15
+	case gap > 20:
+		gap = 20
 	case gap < 5:
 		gap = 5
 	}
