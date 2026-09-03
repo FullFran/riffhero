@@ -10,3 +10,8 @@
 *.musicxml
 *.mid
 .DS_Store
+
+# Release archives from `make dist`; the real ones are built by CI.
+riffhero_v*.tar.gz
+riffhero_v*.zip
+checksums.txt
