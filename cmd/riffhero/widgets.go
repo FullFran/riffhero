@@ -165,9 +165,10 @@ type stepper struct {
 	x, y, w, h float64
 	label      string
 	value      string
+	key        string
 	atMin      bool
 	atMax      bool
-	keys       string // e.g. "[ ]", drawn under the label
+	off        bool
 }
 
 const stepperButtonW = 40
@@ -181,12 +182,22 @@ func (s stepper) plus() button {
 }
 
 func (s stepper) draw(screen *ebiten.Image) {
-	textY := int(s.y + (s.h-glyphH)/2)
-	drawTinted(screen, s.label, int(s.x), textY, menuInk)
-	if s.keys != "" {
-		drawTinted(screen, s.keys, int(s.x), textY+lineH, menuDim)
+	// The same plate as an action row. Without it a settings screen reads as
+	// two different screens stacked, and the eye stops trusting that the rows
+	// are the same kind of thing.
+	face, ink, accent := buttonFace, menuInk, menuAccent
+	if s.off {
+		face, ink, accent = buttonOffFace, buttonOffInk, buttonOffInk
 	}
-	drawTinted(screen, s.value, int(s.x+s.w-2*stepperButtonW-16-textWidth(s.value)), textY, menuAccent)
+	vector.DrawFilledRect(screen, float32(s.x), float32(s.y), float32(s.w), float32(s.h), face, false)
+	vector.StrokeRect(screen, float32(s.x), float32(s.y), float32(s.w), float32(s.h), 2, buttonEdge, false)
+
+	textY := int(s.y + (s.h-glyphH)/2)
+	if s.key != "" && !s.off {
+		drawTinted(screen, s.key, int(s.x)+5, int(s.y)+4, menuDim)
+	}
+	drawTinted(screen, s.label, int(s.x)+30, textY, ink)
+	drawTinted(screen, s.value, int(s.x+s.w-2*stepperButtonW-22-textWidth(s.value)), textY, accent)
 	s.minus().draw(screen)
 	s.plus().draw(screen)
 }

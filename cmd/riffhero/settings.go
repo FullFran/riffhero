@@ -50,6 +50,10 @@ type settingRow struct {
 	do func(*app)
 }
 
+// settingRowH is the height of a row itself, leaving the rest of its pitch
+// for the note underneath.
+const settingRowH = 36.0
+
 const (
 	volumeStep  = 0.05
 	monitorStep = 0.05
@@ -171,18 +175,46 @@ var settingRows = []settingRow{
 
 func (a *app) openSettings() { a.mode = inSettings }
 
-const settingRowHeight = 44
+const (
+	settingsTop     = 112.0
+	settingsBottom  = 74.0 // room for the back button
+	settingRowMax   = 58.0 // a row and the line explaining it underneath
+	settingRowMin   = 30.0
+	settingNoteRoom = 16.0 // the pitch at which the explanations still fit
+)
+
+// settingPitch divides whatever room the window has between the rows.
+//
+// Eleven settings at a fixed pitch run off the bottom of a half-screen window,
+// and the two that fall off are the two nobody then knows exist. The rows
+// shrink instead, and the explanations underneath are the first thing to go —
+// they are the part somebody stops needing after the first week.
+func (a *app) settingPitch() float64 {
+	room := float64(a.height) - settingsTop - settingsBottom
+	pitch := room / float64(len(settingRows))
+	switch {
+	case pitch > settingRowMax:
+		pitch = settingRowMax
+	case pitch < settingRowMin:
+		pitch = settingRowMin
+	}
+	return pitch
+}
+
+func (a *app) settingNotesFit() bool {
+	return a.settingPitch() >= settingRowH+settingNoteRoom
+}
 
 func (a *app) settingGeometry(i int) (x, y, w float64) {
 	x, w = 40, float64(a.width)-80
-	return x, 118 + float64(i)*settingRowHeight, w
+	return x, settingsTop + float64(i)*a.settingPitch(), w
 }
 
 func (a *app) settingButtons() []button {
 	out := make([]button, 0, len(settingRows))
 	for i, r := range settingRows {
 		x, y, w := a.settingGeometry(i)
-		b := button{x: x, y: y, w: w, h: settingRowHeight - 8, key: r.key}
+		b := button{x: x, y: y, w: w, h: settingRowH, key: r.key}
 		if r.off != nil {
 			b.off = r.off(a)
 		}
@@ -214,7 +246,7 @@ func (a *app) updateSettings() {
 		switch r.kind {
 		case settingStep:
 			x, y, w := a.settingGeometry(i)
-			s := stepper{x: x, y: y, w: w, h: settingRowHeight - 8}
+			s := stepper{x: x, y: y, w: w, h: settingRowH}
 			if r.atMin != nil {
 				s.atMin = r.atMin(a)
 			}
@@ -251,12 +283,12 @@ func (a *app) drawSettings(screen *ebiten.Image) {
 
 	for i, r := range settingRows {
 		x, y, w := a.settingGeometry(i)
-		h := float64(settingRowHeight - 8)
+		h := settingRowH
 		disabled := r.off != nil && r.off(a)
 
 		switch r.kind {
 		case settingStep:
-			s := stepper{x: x, y: y, w: w, h: h, label: r.label, value: r.value(a)}
+			s := stepper{x: x, y: y, w: w, h: h, label: r.label, value: r.value(a), key: r.key, off: disabled}
 			if r.atMin != nil {
 				s.atMin = disabled || r.atMin(a)
 			}
@@ -278,10 +310,24 @@ func (a *app) drawSettings(screen *ebiten.Image) {
 			drawTinted(screen, r.value(a), int(x+w-textWidth(r.value(a)))-14, int(y+(h-glyphH)/2), menuAccent)
 		}
 
-		if r.note != nil && !disabled {
-			if note := r.note(a); note != "" {
-				drawDim(screen, note, int(x)+30, int(y+h)+1)
-			}
+	}
+
+	// The explanations go on after every row, so a row cannot paint over the
+	// line belonging to the one above it — and only when there is room.
+	if !a.settingNotesFit() {
+		a.backButton().draw(screen)
+		if a.noticeTicks > 0 {
+			drawTinted(screen, a.notice, 240, a.height-50, menuAccent)
+		}
+		return
+	}
+	for i, r := range settingRows {
+		if r.note == nil || (r.off != nil && r.off(a)) {
+			continue
+		}
+		x, y, _ := a.settingGeometry(i)
+		if note := r.note(a); note != "" {
+			drawDim(screen, clip(note, (a.width-100)/glyphW), int(x)+30, int(y+settingRowH)+4)
 		}
 	}
 

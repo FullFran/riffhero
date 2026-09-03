@@ -32,8 +32,12 @@ func staffFor(top, bottom float64) ui.StaffLayout {
 	return ui.StaffLayout{Top: top + ((bottom-top)-height)/2, LineGap: gap}
 }
 
+// gutterX is where the reading area starts: everything left of it belongs to
+// the clef and the string names.
+const gutterX = 44
+
 func (a *app) drawStaffLines(screen *ebiten.Image, s ui.StaffLayout) {
-	left, right := float32(44), float32(a.layout.Width)-24
+	left, right := float32(gutterX), float32(a.layout.Width)-24
 	for n := 0; n < 5; n++ {
 		y := float32(s.LineY(n))
 		vector.StrokeLine(screen, left, y, right, y, 1, colorString, false)
@@ -84,55 +88,59 @@ func (a *app) drawStaffNotes(screen *ebiten.Image, s ui.StaffLayout, now practic
 }
 
 func (a *app) drawStaffNote(screen *ebiten.Image, s ui.StaffLayout, now practice.Frame, n practice.Note, c color.RGBA, highlight bool) {
-	place := ui.PlaceOnStaff(n.MIDI, a.spelling)
 	x := float32(a.layout.NoteX(now, n.Start))
+	if x < gutterX {
+		// The left edge is the labels' column. A note drawn into it lands on
+		// top of the clef or the string names.
+		return
+	}
+	place := ui.PlaceOnStaff(n.MIDI, a.spelling)
 	y := float32(s.Y(place.Step))
 
-	headW := float32(s.LineGap * 0.72)
-	headH := float32(s.LineGap * 0.52)
+	// A note head is round. An earlier version drew it as a thick line, which
+	// with square caps is a rectangle and reads as a bar rather than a note.
+	head := float32(s.LineGap * 0.42)
 
 	// Ledger lines first, so the head sits on top of them.
 	for _, step := range place.Ledgers {
 		ly := float32(s.Y(step))
-		vector.StrokeLine(screen, x-headW*1.5, ly, x+headW*1.5, ly, 1, colorString, false)
+		vector.StrokeLine(screen, x-head*2, ly, x+head*2, ly, 1, colorString, false)
 	}
 
 	rhythm := ui.ClassifyDuration(a.clock, a.barBPM(n.Start), n.Duration)
 
 	if highlight {
-		vector.StrokeCircle(screen, x, y, headW*1.6, 2, colorNext, true)
+		vector.StrokeCircle(screen, x, y, head*2.4, 2, colorNext, true)
 	}
-	drawNoteHead(screen, x, y, headW, headH, rhythm.Value.Hollow(), c)
+	drawNoteHead(screen, x, y, head, rhythm.Value.Hollow(), c)
 
 	if rhythm.Value.Stem() {
-		drawStem(screen, x, y, headW, float32(s.LineGap), rhythm.Value.Flags(), ui.StemUp(place.Step), c)
+		drawStem(screen, x, y, head, float32(s.LineGap), rhythm.Value.Flags(), ui.StemUp(place.Step), c)
 	}
 	if rhythm.Dotted {
-		vector.DrawFilledCircle(screen, x+headW*1.5, y-headH*0.6, 1.6, c, true)
+		vector.DrawFilledCircle(screen, x+head*2, y-head, 1.6, c, true)
 	}
 	if acc := place.Accidental.String(); acc != "" {
-		drawTinted(screen, acc, int(x-headW)-glyphW-2, int(y)-glyphH/2, c)
+		drawTinted(screen, acc, int(x-head)-glyphW-3, int(y)-glyphH/2, c)
 	}
 }
 
-// drawNoteHead is an ellipse, filled for a quarter and shorter, open for a
-// half and a whole. Ebiten draws circles, so the ellipse is a circle scaled on
-// one axis by drawing a short thick line — cheaper than a path and, at this
-// size, indistinguishable.
-func drawNoteHead(screen *ebiten.Image, x, y, w, h float32, hollow bool, c color.RGBA) {
+// drawNoteHead is filled for a quarter and shorter, open for a half and a
+// whole. A real engraver would draw a slanted ellipse; at a dozen pixels a
+// circle is indistinguishable and does not need a path.
+func drawNoteHead(screen *ebiten.Image, x, y, r float32, hollow bool, c color.RGBA) {
 	if hollow {
-		vector.StrokeLine(screen, x-w/2, y, x+w/2, y, h, c, true)
-		vector.StrokeLine(screen, x-w/2+1, y, x+w/2-1, y, h-2.6, colorBackground, true)
+		vector.StrokeCircle(screen, x, y, r, 1.8, c, true)
 		return
 	}
-	vector.StrokeLine(screen, x-w/2, y, x+w/2, y, h, c, true)
+	vector.DrawFilledCircle(screen, x, y, r, c, true)
 }
 
-func drawStem(screen *ebiten.Image, x, y, headW, gap float32, flags int, up bool, c color.RGBA) {
-	length := gap * 3.5
-	sx, dir := x+headW/2, float32(-1)
+func drawStem(screen *ebiten.Image, x, y, head, gap float32, flags int, up bool, c color.RGBA) {
+	length := gap * 3.2
+	sx, dir := x+head, float32(-1)
 	if !up {
-		sx, dir = x-headW/2, 1
+		sx, dir = x-head, 1
 	}
 	end := y + dir*length
 	vector.StrokeLine(screen, sx, y, sx, end, 1.4, c, false)

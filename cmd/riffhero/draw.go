@@ -109,7 +109,7 @@ func (a *app) drawStrings(screen *ebiten.Image) {
 	labels := ui.StringLabels(a.tuning())
 	for s := uint8(1); s <= 6; s++ {
 		y := float32(a.tab.StringY(s))
-		vector.StrokeLine(screen, 44, y, float32(a.layout.Width)-24, y, 1, colorString, false)
+		vector.StrokeLine(screen, gutterX, y, float32(a.layout.Width)-24, y, 1, colorString, false)
 		ebitenutil.DebugPrintAt(screen, labels[s-1], 26, int(y)-7)
 	}
 }
@@ -141,6 +141,11 @@ func (a *app) drawNotes(screen *ebiten.Image, now practice.Frame) {
 
 func (a *app) drawNote(screen *ebiten.Image, now practice.Frame, n practice.Note, c color.RGBA, highlight bool) {
 	x := float32(a.layout.NoteX(now, n.Start))
+	if x < gutterX {
+		// The left edge is the string names' column; a note drawn into it
+		// lands on top of them.
+		return
+	}
 	y := float32(a.tab.StringY(n.String))
 
 	// A held note is drawn as a bar rather than a dot, so a whole note and a

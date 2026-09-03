@@ -222,3 +222,63 @@ func TestPlacesLeavesOutWhatIsNotThere(t *testing.T) {
 		}
 	}
 }
+
+func TestPlacesReadsTheLocalisedFolderNames(t *testing.T) {
+	// On a Spanish desktop the music folder is Música and the downloads folder
+	// is Descargas. Guessing the English names finds neither, which is how a
+	// song picker ends up offering only the home directory.
+	home := t.TempDir()
+	config := filepath.Join(home, ".config")
+	if err := os.MkdirAll(config, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "Música"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "# a comment\nXDG_DOCUMENTS_DIR=\"$HOME/Documentos\"\nXDG_MUSIC_DIR=\"$HOME/Música\"\n"
+	if err := os.WriteFile(filepath.Join(config, "user-dirs.dirs"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", config)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_MUSIC_DIR", "")
+	userDirsRead, userDirsCache = false, nil
+	t.Cleanup(func() { userDirsRead, userDirsCache = false, nil })
+
+	var found bool
+	for _, p := range Places() {
+		if p.Path == filepath.Join(home, "Música") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Música was not offered; got %v", Places())
+	}
+}
+
+func TestUserDirsIgnoresRubbish(t *testing.T) {
+	home := t.TempDir()
+	config := filepath.Join(home, ".config")
+	if err := os.MkdirAll(config, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "\n# comment\nnot a pair\nXDG_MUSIC_DIR=\nXDG_VIDEOS_DIR=\"/srv/video\"\n"
+	if err := os.WriteFile(filepath.Join(config, "user-dirs.dirs"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", config)
+	userDirsRead, userDirsCache = false, nil
+	t.Cleanup(func() { userDirsRead, userDirsCache = false, nil })
+
+	got := userDirs(home)
+	if got["XDG_VIDEOS_DIR"] != "/srv/video" {
+		t.Fatalf("absolute path not read: %v", got)
+	}
+	if _, ok := got["XDG_MUSIC_DIR"]; ok {
+		t.Fatalf("an empty value was kept: %v", got)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %v", got)
+	}
+}
