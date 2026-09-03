@@ -28,7 +28,7 @@
                           │
                    internal/dsp
           ring, gate, onset, MPM/YIN, tracker,
-                FFT, chroma, chord verifier
+                   FFT, chord verifier
 ```
 
 `internal/practice` imports nothing but the standard library. Everything else
@@ -150,4 +150,7 @@ the HUD counts in. Importers that carry tablature keep it; those that do not
 get their notes placed on the neck by `practice.Fretboard`, which remembers
 where the hand was so a phrase stays in one position.
 
-Repeats are expanded at import. A practice timeline is linear.
+Repeats are expanded at import, in both the Guitar Pro and MusicXML importers:
+a practice timeline is linear. Direction jumps — Da Capo, Dal Segno, Coda,
+Fine — are read and deliberately not followed; a score using them plays
+straight through, and each importer says so in its package documentation.
