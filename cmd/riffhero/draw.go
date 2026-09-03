@@ -30,14 +30,43 @@ var (
 	colorMeterBed   = color.RGBA{0x25, 0x2a, 0x32, 0xff}
 )
 
-func (a *app) Draw(screen *ebiten.Image) {
+// drawPractice is the reading view: whichever of the tab and the staff is
+// switched on, the playhead, and the scoreboard.
+//
+// Both readings scroll on one timeline, so a note is at the same x in each and
+// showing them together lines up rather than merely coexisting. The vertical
+// space is what they share, and the tab gives up rather more than half of it
+// when they do — five staff lines with ledgers either side need the room, and
+// six strings survive being squeezed.
+func (a *app) drawPractice(screen *ebiten.Image) {
 	screen.Fill(colorBackground)
 
 	now := a.head.Position()
+	top, bottom := a.layout.Band()
+
+	a.tab = a.layout
+	staffOn := a.showsStaff()
+	var staff ui.StaffLayout
+	switch {
+	case staffOn && a.showsTab():
+		mid := top + (bottom-top)*0.52
+		staff = staffFor(top, mid)
+		a.tab = a.layout.WithBand(mid+10, bottom)
+	case staffOn:
+		staff = staffFor(top, bottom)
+	}
+
 	a.drawLoopRegion(screen, now)
-	a.drawGrid(screen, now)
-	a.drawStrings(screen)
-	a.drawNotes(screen, now)
+	if staffOn {
+		a.drawStaffLines(screen, staff)
+		a.drawStaffGrid(screen, staff, now)
+		a.drawStaffNotes(screen, staff, now)
+	}
+	if a.showsTab() {
+		a.drawGrid(screen, now)
+		a.drawStrings(screen)
+		a.drawNotes(screen, now)
+	}
 	a.drawPlayhead(screen, now)
 	a.drawHUD(screen)
 
@@ -53,8 +82,7 @@ func (a *app) drawLoopRegion(screen *ebiten.Image, now practice.Frame) {
 	if !ok {
 		return
 	}
-	top := float32(a.layout.StringY(1)) - 30
-	bottom := float32(a.layout.StringY(6)) + 30
+	top, bottom := a.readingBand()
 
 	vector.DrawFilledRect(screen, float32(x1), top, float32(x2-x1), bottom-top, colorLoop, false)
 	vector.StrokeLine(screen, float32(x1), top, float32(x1), bottom, 2, colorLoopEdge, false)
@@ -62,8 +90,8 @@ func (a *app) drawLoopRegion(screen *ebiten.Image, now practice.Frame) {
 }
 
 func (a *app) drawGrid(screen *ebiten.Image, now practice.Frame) {
-	top := float32(a.layout.StringY(1)) - 22
-	bottom := float32(a.layout.StringY(6)) + 22
+	top := float32(a.tab.StringY(1)) - 22
+	bottom := float32(a.tab.StringY(6)) + 22
 
 	for _, bar := range a.layout.VisibleBars(now, a.song.Grid) {
 		// Beats first so the bar line draws over them.
@@ -80,7 +108,7 @@ func (a *app) drawGrid(screen *ebiten.Image, now practice.Frame) {
 func (a *app) drawStrings(screen *ebiten.Image) {
 	labels := ui.StringLabels(a.tuning())
 	for s := uint8(1); s <= 6; s++ {
-		y := float32(a.layout.StringY(s))
+		y := float32(a.tab.StringY(s))
 		vector.StrokeLine(screen, 44, y, float32(a.layout.Width)-24, y, 1, colorString, false)
 		ebitenutil.DebugPrintAt(screen, labels[s-1], 26, int(y)-7)
 	}
@@ -113,7 +141,7 @@ func (a *app) drawNotes(screen *ebiten.Image, now practice.Frame) {
 
 func (a *app) drawNote(screen *ebiten.Image, now practice.Frame, n practice.Note, c color.RGBA, highlight bool) {
 	x := float32(a.layout.NoteX(now, n.Start))
-	y := float32(a.layout.StringY(n.String))
+	y := float32(a.tab.StringY(n.String))
 
 	// A held note is drawn as a bar rather than a dot, so a whole note and a
 	// sixteenth do not look like the same instruction.
@@ -136,8 +164,7 @@ func fretOffset(fret uint8) int {
 
 func (a *app) drawPlayhead(screen *ebiten.Image, now practice.Frame) {
 	x := float32(a.layout.PlayheadX)
-	top := float32(a.layout.StringY(1)) - 30
-	bottom := float32(a.layout.StringY(6)) + 30
+	top, bottom := a.readingBand()
 	vector.StrokeLine(screen, x, top, x, bottom, 2, colorPlayhead, false)
 
 	if a.runner.Session().HasRating() {
@@ -175,6 +202,21 @@ func (a *app) drawHUD(screen *ebiten.Image) {
 	if a.noticeTicks > 0 {
 		ebitenutil.DebugPrintAt(screen, a.notice, 16, y+4)
 	}
+}
+
+// readingBand is the vertical span the playhead and the loop shading cover:
+// everything on show, whether that is one reading or two.
+func (a *app) readingBand() (top, bottom float32) {
+	t, b := a.layout.Band()
+	if a.showsTab() {
+		if y := a.tab.StringY(6) + 30; y > b {
+			b = y
+		}
+		if y := a.tab.StringY(1) - 30; y < t {
+			t = y
+		}
+	}
+	return float32(t), float32(b)
 }
 
 // drawMeter is the input level, drawn rather than spelled out: a bar is read
@@ -240,6 +282,9 @@ func (a *app) hudInput() ui.HUDInput {
 var helpLines = []string{
 	"RiffHero",
 	"",
+	"  ESC        back to the menu",
+	"  S          settings",
+	"  N          tablature / notation / both",
 	"  SPACE      play / pause",
 	"  R          restart and clear the scoreboard",
 	"  LEFT/RIGHT seek a bar back / forward",

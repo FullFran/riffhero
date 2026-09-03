@@ -22,9 +22,11 @@ type app struct {
 	opts options
 	cfg  config.Config
 
-	clock practice.Clock
-	song  *practice.Song
-	track int
+	clock       practice.Clock
+	song        *practice.Song
+	track       int
+	scorePath   string
+	backingPath string
 
 	// head is what the rest of the app asks for the time. It is either the
 	// audio engine's player, driven by the device callback, or a plain
@@ -33,16 +35,33 @@ type app struct {
 	head      practice.Playhead
 	transport *practice.Transport // set only when the game loop drives time
 
-	host   *audio.Host
-	engine *audio.Engine
-	player *audio.Player
-	det    *dsp.Detector
+	// The host is opened once and kept for the life of the process. It cannot
+	// be reopened: a failed ma_device_init leaves miniaudio unable to create
+	// another context, and the next InitContext segfaults. Devices, on the
+	// other hand, can be closed and opened again as often as the settings
+	// screen likes — measured, including after one that failed to open.
+	host    *audio.Host
+	engine  *audio.Engine
+	player  *audio.Player
+	det     *dsp.Detector
+	backing []float32
+
+	// input and output are the endpoints in use; inputs and outputs are what
+	// the host last reported, for the picker.
+	input, output   *audio.Device
+	inputs, outputs []audio.Device
 
 	runner *practice.Runner
+
+	// layout is the whole reading area and the timeline geometry both readings
+	// share; tab is the same thing squeezed into whatever vertical space is
+	// left once the staff has had its share.
 	layout ui.Layout
+	tab    ui.Layout
 
 	width, height int
 
+	quitting    bool
 	calibrated  bool
 	loop        practice.Loop
 	showHelp    bool
@@ -51,16 +70,31 @@ type app struct {
 	notice      string
 	noticeTicks int
 	warnings    []string
+
+	// The menu side: which screen is up, and the state each of them keeps.
+	mode     mode
+	asking   string
+	onYes    func()
+	onNo     func()
+	browse   browseState
+	settings settingsState
+	calib    calibState
+	notation config.Notation
+	spelling ui.Spelling
 }
 
 func build(o options, cfg config.Config) (*app, error) {
 	clock := practice.Clock{SampleRate: o.sampleRate}
+	o.scorePath = scoreToOpen(o, cfg)
 
 	song, err := loadSong(o, clock)
 	if err != nil {
 		return nil, err
 	}
 	track := o.track
+	if track < 0 && cfg.Track > 0 && cfg.Track < len(song.Tracks) && o.scorePath == cfg.Score {
+		track = cfg.Track
+	}
 	if track < 0 || track >= len(song.Tracks) {
 		if o.track >= 0 {
 			return nil, fmt.Errorf("track %d does not exist; the score has %d", o.track, len(song.Tracks))
@@ -72,22 +106,31 @@ func build(o options, cfg config.Config) (*app, error) {
 	}
 
 	a := &app{
-		opts:   o,
-		cfg:    cfg,
-		clock:  clock,
-		song:   song,
-		track:  track,
-		width:  screenWidth,
-		height: screenHeight,
+		opts:      o,
+		cfg:       cfg,
+		clock:     clock,
+		song:      song,
+		track:     track,
+		scorePath: o.scorePath,
+		width:     screenWidth,
+		height:    screenHeight,
 	}
 	a.layout = ui.NewLayout(float64(a.width), float64(a.height), clock)
 
+	a.notation = cfg.Notation
+	if o.notation != "" {
+		a.notation = config.Notation(o.notation)
+	}
+	if !a.notation.Valid() {
+		a.notation = config.NotationTab
+	}
+	a.spelling = spellingFor(cfg.Spelling)
+
+	// A missing or busy sound card is not a reason to refuse to start. The
+	// scripted path still shows the score, the transport and the scoring, and
+	// the warning says exactly what was lost.
 	if err := a.startAudio(); err != nil {
-		// A missing or busy sound card is not a reason to refuse to start. The
-		// scripted path still shows the score, the transport and the scoring,
-		// and the warning says exactly what was lost.
 		a.warnings = append(a.warnings, "audio unavailable: "+err.Error())
-		a.stopAudio()
 	}
 	if a.head == nil {
 		a.startScripted()
@@ -117,98 +160,6 @@ func (a *app) end(backingFrames int) practice.Frame {
 		end = f
 	}
 	return end
-}
-
-// startAudio opens the device and everything hanging off it.
-func (a *app) startAudio() error {
-	if a.opts.noAudio {
-		return nil
-	}
-
-	host, err := audio.OpenHost(backendList(a.opts, a.cfg))
-	if err != nil {
-		return err
-	}
-	a.host = host
-
-	in, note, err := resolveDevice(host, audio.Input, a.opts.input, a.cfg.InputDevice)
-	if err != nil {
-		return err
-	}
-	a.note(note)
-
-	var out *audio.Device
-	playback := !a.opts.noBacking
-	if playback {
-		if out, note, err = resolveDevice(host, audio.Output, a.opts.output, a.cfg.OutputDevice); err != nil {
-			return err
-		}
-		a.note(note)
-	}
-
-	backing, err := a.loadBacking()
-	if err != nil {
-		// A missing backing track is worth saying but not worth refusing over:
-		// practising the part unaccompanied is still practising.
-		a.warnings = append(a.warnings, err.Error())
-	}
-
-	a.player = audio.NewPlayer(a.clock, a.end(len(backing)/2))
-	a.det = dsp.NewDetector(a.opts.sampleRate)
-	a.det.LatencyOffset = a.latencyOffset()
-	a.calibrated = a.det.LatencyOffset > 0
-
-	engine, err := audio.Open(host, audio.Config{
-		SampleRate: a.opts.sampleRate,
-		Input:      in,
-		Output:     out,
-		Capture:    true,
-		Playback:   playback,
-		Backing:    backing,
-		Volume:     a.volumeSetting(),
-		Monitor:    a.monitorSetting(),
-	}, a.player, a.det)
-	if err != nil {
-		return err
-	}
-	a.engine = engine
-
-	if err := engine.Start(); err != nil {
-		return err
-	}
-
-	// With no stored measurement, the device's own buffering is a far better
-	// starting point than zero: it is a real lower bound on the round trip,
-	// and the alternative is telling a player who is dead on time that they
-	// are consistently early. It is not a substitute for measuring, and the
-	// HUD goes on saying so.
-	if !a.calibrated {
-		a.det.LatencyOffset = engine.Latency()
-	}
-
-	a.head = a.player
-	return nil
-}
-
-// startScripted is the no-hardware path: the game loop drives a Transport and
-// a simulated player produces the note events.
-func (a *app) startScripted() {
-	a.transport = practice.NewTransport(a.clock, a.end(0))
-	a.head = a.transport
-}
-
-func (a *app) stopAudio() {
-	if a.engine != nil {
-		a.engine.Close()
-		a.engine = nil
-	}
-	if a.host != nil {
-		_ = a.host.Close()
-		a.host = nil
-	}
-	a.player = nil
-	a.det = nil
-	a.head = nil
 }
 
 // detector returns the note source: the real one when there is a device, and a
@@ -266,7 +217,7 @@ func (a *app) buildRunner() {
 			MaxCents: 35,
 		},
 		Progression: practice.DefaultProgression,
-		Adaptive:    a.opts.adaptive,
+		Adaptive:    a.opts.adaptive || a.cfg.Progressive,
 	}
 	if a.det != nil {
 		cfg.Expecter = a.det
@@ -304,13 +255,18 @@ func (a *app) applyInitialSettings() error {
 }
 
 func (a *app) loadBacking() ([]float32, error) {
-	if a.opts.backing == "" {
+	path := a.opts.backing
+	if path == "" {
+		path = a.cfg.Backing
+	}
+	if path == "" {
 		return nil, nil
 	}
-	pcm, err := codec.DecodeFile(a.opts.backing)
+	pcm, err := codec.DecodeFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("backing track: %w", err)
 	}
+	a.backingPath = path
 	return pcm.Conform(a.opts.sampleRate, 2).Data, nil
 }
 
@@ -345,16 +301,64 @@ func (a *app) note(text string) {
 	}
 }
 
-// live reports whether a real guitar is being listened to.
-func (a *app) live() bool { return a.det != nil }
+// Close releases the device and the backend.
+func (a *app) Close() {
+	a.closeStream()
+	if a.host != nil {
+		_ = a.host.Close()
+		a.host = nil
+	}
+}
 
-// Close releases the device.
-func (a *app) Close() { a.stopAudio() }
+// startAudio brings the whole audio side up: the host, the endpoints, the
+// backing track and a stream over all three.
+func (a *app) startAudio() error {
+	if a.opts.noAudio {
+		return nil
+	}
+	if err := a.openHost(); err != nil {
+		return err
+	}
+	if err := a.resolveInitialDevices(); err != nil {
+		return err
+	}
+
+	backing, err := a.loadBacking()
+	if err != nil {
+		// A missing backing track is worth saying but not worth refusing over:
+		// practising the part unaccompanied is still practising.
+		a.warnings = append(a.warnings, err.Error())
+	}
+	a.backing = backing
+
+	return a.openStream()
+}
+
+func spellingFor(name string) ui.Spelling {
+	if name == "flats" {
+		return ui.Flats
+	}
+	return ui.Sharps
+}
 
 // persist writes back the settings worth remembering across sessions.
+//
+// Everything the settings screen can change is in here, because a setting that
+// has to be found again every time is one somebody stops changing.
 func (a *app) persist() error {
 	cfg := a.cfg
 	cfg.Speed = a.head.Speed()
+	cfg.Notation = a.notation
+	cfg.Score, cfg.Backing, cfg.Track = a.scorePath, a.backingPath, a.track
+	if a.runner != nil {
+		cfg.Progressive = a.runner.Adaptive()
+	}
+	if a.input != nil {
+		cfg.InputDevice = a.input.Name
+	}
+	if a.output != nil {
+		cfg.OutputDevice = a.output.Name
+	}
 	if a.engine != nil {
 		cfg.Volume = a.engine.Volume()
 		cfg.Monitor = a.engine.Monitor()

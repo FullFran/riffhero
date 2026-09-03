@@ -45,6 +45,7 @@ type options struct {
 	latencyMS  float64
 	adaptive   bool
 	loop       string
+	notation   string
 	sampleRate int
 
 	listDevices bool
@@ -136,6 +137,7 @@ func parseFlags() (options, error) {
 	flag.Float64Var(&o.latencyMS, "latency", -1, "round-trip latency in milliseconds, overriding the stored measurement")
 	flag.BoolVar(&o.adaptive, "progressive", false, "start with the progressive practice rule switched on")
 	flag.StringVar(&o.loop, "loop", "", "practise a bar range, e.g. 9-12")
+	flag.StringVar(&o.notation, "reading", "", "what to show: tab, staff or both")
 	flag.IntVar(&o.sampleRate, "rate", 48000, "sample rate to ask the device for")
 
 	flag.BoolVar(&o.listDevices, "list-devices", false, "print the audio devices and exit")
@@ -390,6 +392,23 @@ func loadSong(o options, clock practice.Clock) (*practice.Song, error) {
 		return practice.SyntheticScore(clock), nil
 	}
 	return score.Load(o.scorePath, clock)
+}
+
+// scoreToOpen is the file the app should start on: the one named on the
+// command line, else the one it was last left on. A score that has since been
+// moved or deleted is not an error — the built-in phrase stands in, and the
+// title screen still opens.
+func scoreToOpen(o options, cfg config.Config) string {
+	if o.scorePath != "" {
+		return o.scorePath
+	}
+	if cfg.Score == "" {
+		return ""
+	}
+	if _, err := os.Stat(cfg.Score); err != nil {
+		return ""
+	}
+	return cfg.Score
 }
 
 // pick returns the first non-empty of the two, so a flag always beats a stored
