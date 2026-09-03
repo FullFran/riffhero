@@ -125,6 +125,12 @@ type Config struct {
 	// an answer the player gave. It only ever means the file was written
 	// before the setting existed, and Default() is the right thing to fall
 	// back to in that case.
+	// InputChannel is which socket of a multi-input interface the guitar is
+	// in: "mix", "left" or "right". It is a setting rather than a guess
+	// because nothing in the audio distinguishes a guitar in socket one from
+	// a microphone recorded onto both.
+	InputChannel string `json:"input_channel,omitempty"`
+
 	Notation Notation `json:"notation,omitempty"`
 	Spelling string   `json:"spelling,omitempty"`
 

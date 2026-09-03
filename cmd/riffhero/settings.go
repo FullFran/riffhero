@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -80,6 +81,15 @@ var settingRows = []settingRow{
 		note:  func(a *app) string { return "where the backing track comes out" },
 		off:   func(a *app) bool { return a.host == nil },
 		do:    func(a *app) { a.openDevices(audio.Output) },
+	},
+	{
+		label: "GUITAR IS ON", key: "C", kind: settingAction,
+		value: func(a *app) string { return a.channel.String() },
+		note: func(a *app) string {
+			return "which socket of the interface; watch the meters on the device screen"
+		},
+		off: func(a *app) bool { return a.engine == nil },
+		do:  func(a *app) { a.setChannel(a.channel.Next()) },
 	},
 	{
 		label: "LATENCY", key: "3", kind: settingStep,
@@ -438,7 +448,55 @@ func (a *app) drawDevices(screen *ebiten.Image) {
 	if len(a.deviceList()) == 0 {
 		drawTinted(screen, "no devices — is anything plugged in?", 44, 124, menuBad)
 	}
+	if a.settings.kind == audio.Input {
+		a.drawInputMeters(screen, len(rows))
+	}
 	a.backButton().draw(screen)
+}
+
+// drawInputMeters shows each socket separately, because that is the only way
+// to find out which one the guitar is in without unplugging things: play, and
+// watch which bar moves.
+func (a *app) drawInputMeters(screen *ebiten.Image, rows int) {
+	if a.engine == nil {
+		return
+	}
+	y := 130 + rows*browseRowHeight
+	if limit := a.height - 130; y > limit {
+		y = limit
+	}
+	drawDim(screen, "play something and watch which one moves", 40, y)
+	y += 24
+
+	peaks := a.engine.InputPeaks()
+	names := [...]string{"input 1", "input 2"}
+	for i, peak := range peaks {
+		ink := menuGood
+		if a.channel == audio.ChannelLeft && i == 1 || a.channel == audio.ChannelRight && i == 0 {
+			ink = menuDim // not the one being listened to
+		}
+		drawDim(screen, names[i], 40, y)
+		drawMeter(screen, 110, float64(y)+3, float64(a.width)-260, 8, dbFill(peak), ink)
+		drawTinted(screen, decibels(peak), a.width-130, y, menuDim)
+		y += 22
+	}
+	drawDim(screen, "listening to: "+a.channel.String()+"    C to change", 40, y+4)
+}
+
+// dbFill scales a peak onto the same decibel scale the HUD meter uses, so the
+// two read alike.
+func dbFill(peak float64) float64 {
+	if peak <= 0 {
+		return 0
+	}
+	return ui.MeterLevel(20 * math.Log10(peak))
+}
+
+func decibels(peak float64) string {
+	if peak <= 0 {
+		return "  -inf"
+	}
+	return fmt.Sprintf("%5.1f dB", 20*math.Log10(peak))
 }
 
 func (a *app) backendName() string {
@@ -449,6 +507,18 @@ func (a *app) backendName() string {
 }
 
 // ------------------------------------------------------------ small helpers
+
+// setChannel switches which input the detector listens to. It does not reopen
+// the device: the point is to try each socket while playing, and a stream that
+// stops and starts between attempts makes that impossible to judge.
+func (a *app) setChannel(c audio.InputChannel) {
+	a.channel = c
+	if a.engine != nil {
+		a.engine.SetChannel(c)
+	}
+	a.cfg.InputChannel = c.String()
+	a.showNotice("listening to the " + c.String() + " input")
+}
 
 func (a *app) setNotation(n config.Notation) {
 	a.notation, a.cfg.Notation = n, n
@@ -533,6 +603,8 @@ func keyNamed(name string) ebiten.Key {
 		return ebiten.Key9
 	case "P":
 		return ebiten.KeyP
+	case "C":
+		return ebiten.KeyC
 	}
 	return ebiten.KeyMax
 }
