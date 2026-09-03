@@ -84,6 +84,45 @@ func (c Calibration) String() string {
 		c.Millis, c.Frames, c.Confidence*100, c.PeakDB)
 }
 
+// CalibrationFailure is why a measurement was refused.
+//
+// The reason is a value rather than only a sentence because the screen that
+// shows it has to say it in the player's language, and picking a translation
+// apart from an English error string is not something anybody should be
+// writing. The sentence stays here for the terminal and for the log.
+type CalibrationFailure uint8
+
+const (
+	// HeardNothing: the input was silent. Wrong device, or muted.
+	HeardNothing CalibrationFailure = iota + 1
+	// ClicksNotFound: something came back, but not the clicks. Too quiet, too
+	// far away, or too noisy a room.
+	ClicksNotFound
+	// NotRecording: the device opened and then delivered almost no frames.
+	NotRecording
+)
+
+// CalibrationError is a refused measurement, with the numbers that say which
+// of the three things went wrong.
+type CalibrationError struct {
+	Reason           CalibrationFailure
+	PeakDB           float64
+	Confidence       float64
+	Captured, Wanted int
+}
+
+func (e *CalibrationError) Error() string {
+	switch e.Reason {
+	case HeardNothing:
+		return fmt.Sprintf("the input heard almost nothing (peak %.0f dBFS): check it is the right device and that it is not muted", e.PeakDB)
+	case NotRecording:
+		return fmt.Sprintf("only captured %d of %d frames; is the input device recording?", e.Captured, e.Wanted)
+	default:
+		return fmt.Sprintf("could not pick the clicks out of what came back (confidence %.0f%%, peak %.0f dBFS): turn the output up, move the microphone closer, or quieten the room",
+			e.Confidence*100, e.PeakDB)
+	}
+}
+
 // MinConfidence is the correlation below which a measurement is refused. A bad
 // measurement is worse than none: it would be stored and silently applied to
 // every note for the rest of the session.
@@ -335,7 +374,7 @@ func Calibrate(host *Host, opts CalibrationOptions) (Calibration, error) {
 
 	got := int(inPos.Load())
 	if got < len(recorded)/2 {
-		return Calibration{}, fmt.Errorf("only captured %d of %d frames; is the input device recording?", got, len(recorded))
+		return Calibration{}, &CalibrationError{Reason: NotRecording, Captured: got, Wanted: len(recorded)}
 	}
 
 	maxLag := int(opts.MaxLatencyMillis / 1000 * float64(opts.SampleRate))
@@ -351,11 +390,11 @@ func Calibrate(host *Host, opts CalibrationOptions) (Calibration, error) {
 	if confidence < MinConfidence {
 		// Two very different failures, and the fix for each is different, so
 		// they get different sentences.
+		reason := ClicksNotFound
 		if result.PeakDB < -50 {
-			return result, fmt.Errorf("the input heard almost nothing (peak %.0f dBFS): check it is the right device and that it is not muted", result.PeakDB)
+			reason = HeardNothing
 		}
-		return result, fmt.Errorf("could not pick the clicks out of what came back (confidence %.0f%%, peak %.0f dBFS): turn the output up, move the microphone closer, or quieten the room",
-			confidence*100, result.PeakDB)
+		return result, &CalibrationError{Reason: reason, PeakDB: result.PeakDB, Confidence: confidence}
 	}
 	return result, nil
 }

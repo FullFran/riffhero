@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
 )
 
@@ -117,6 +118,16 @@ type Config struct {
 
 	// Tuning names the tuning to assume for scores that do not carry one.
 	Tuning string `json:"tuning,omitempty"`
+
+	// Language is the language the app speaks, "en" or "es".
+	//
+	// Empty is not a missing setting, it is a real answer: follow the desktop.
+	// That is what a first run gets, and it is why this one is omitempty while
+	// Volume is not — the player has said nothing yet, and reading LANG is a
+	// better guess than English on a machine whose every other program is
+	// already in Spanish. Choosing one from the menu writes it down and stops
+	// the guessing.
+	Language string `json:"language,omitempty"`
 
 	// Notation and Spelling are how the practice view reads the score back.
 	//
@@ -264,6 +275,15 @@ func (c *Config) SetLatency(frames practice.Frame, sampleRate int) {
 	c.LatencySampleRate = sampleRate
 }
 
+// LanguageOrDetected resolves the language to speak: the stored choice if
+// there is one, else whatever the desktop is set to.
+func (c Config) LanguageOrDetected(lookup func(string) string) i18n.Lang {
+	if l := i18n.Lang(c.Language); l.Valid() {
+		return l
+	}
+	return i18n.Detect(lookup)
+}
+
 // TuningOrDefault resolves the configured tuning name.
 func (c Config) TuningOrDefault() practice.Tuning {
 	switch c.Tuning {
@@ -296,6 +316,12 @@ func (c Config) sane() Config {
 	}
 	if c.Spelling != SpellingSharps && c.Spelling != SpellingFlats {
 		c.Spelling = SpellingSharps
+	}
+	// A language nobody speaks is cleared rather than replaced with English:
+	// empty means "follow the desktop", which is the better answer of the two
+	// and the one a first run already gets.
+	if c.Language != "" && !i18n.Lang(c.Language).Valid() {
+		c.Language = ""
 	}
 
 	// A negative track index is a panic waiting for whoever indexes the score
