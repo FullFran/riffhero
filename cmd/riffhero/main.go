@@ -20,6 +20,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 
 	"github.com/FullFran/riffhero/internal/audio"
+	"github.com/FullFran/riffhero/internal/buildinfo"
 	"github.com/FullFran/riffhero/internal/config"
 	"github.com/FullFran/riffhero/internal/i18n"
 	"github.com/FullFran/riffhero/internal/practice"
@@ -55,6 +56,7 @@ type options struct {
 	listTracks  bool
 	calibrate   bool
 	dryRun      bool
+	version     bool
 }
 
 func main() {
@@ -100,6 +102,9 @@ func run() error {
 	}
 
 	switch {
+	case opts.version:
+		fmt.Println(buildinfo.String())
+		return nil
 	case opts.listDevices:
 		return listDevices(opts, cfg)
 	case opts.calibrate:
@@ -176,6 +181,7 @@ func parseFlags() (options, error) {
 	flag.BoolVar(&o.listTracks, "list-tracks", false, i18n.T("print the score's tracks and exit"))
 	flag.BoolVar(&o.calibrate, "calibrate", false, i18n.T("measure the round-trip audio latency, store it and exit"))
 	flag.BoolVar(&o.dryRun, "dry-run", false, i18n.T("run the practice loop with no window and no device, print the scoreboard and exit"))
+	flag.BoolVar(&o.version, "version", false, i18n.T("print the version and exit"))
 
 	flag.Usage = usage
 	flag.Parse()
