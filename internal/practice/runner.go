@@ -36,7 +36,21 @@ type RunnerConfig struct {
 	// detection on them. The DSP detector uses this to verify chords
 	// spectrally instead of putting them to a monophonic estimator.
 	Expecter Expecter
+
+	// Strum is how far apart two notes may be written and still count as
+	// struck together. Zero means DefaultStrumTolerance.
+	Strum Frame
 }
+
+// DefaultStrumToleranceSeconds is how long a pick takes to cross the strings.
+//
+// It is deliberately not the Good scoring window. Those are two different
+// questions — "how late may this be and still count" and "were these struck
+// together" — and using one number for both put sixteenth notes at 150 BPM,
+// which are 100 ms apart, through the chord verifier as if they were a chord.
+// That path has a 171 ms window and stamps every pitch it finds at the same
+// position, so a fast single-note run came back as pairs, all late.
+const DefaultStrumToleranceSeconds = 0.030
 
 // Expecter is the part of the detector that can be told what to expect.
 type Expecter interface {
@@ -59,6 +73,9 @@ type Update struct {
 func NewRunner(head Playhead, det Detector, cfg RunnerConfig) *Runner {
 	if cfg.Progression == (Progression{}) {
 		cfg.Progression = DefaultProgression
+	}
+	if cfg.Strum <= 0 {
+		cfg.Strum = head.Clock().Frames(DefaultStrumToleranceSeconds)
 	}
 	r := &Runner{
 		head:     head,
@@ -104,15 +121,36 @@ func (r *Runner) SetLoop(l Loop) {
 func (r *Runner) Restart() {
 	r.head.Restart()
 	r.reset()
+	r.session.ResumeFrom(r.head.Position())
+}
+
+// Seek moves the playhead and tells the scoreboard a jump happened.
+//
+// The scoreboard is deliberately not cleared: seeking back a bar to have
+// another go at it should not throw away the rest of the run. What it must not
+// do is score the notes that were jumped over, which is what happened while
+// the session was only ever told a position.
+func (r *Runner) Seek(to Frame) {
+	r.head.Seek(to)
+	r.session.ResumeFrom(r.head.Position())
 }
 
 // Update advances the run by one turn of the game loop.
 func (r *Runner) Update() Update {
 	out := Update{Speed: r.head.Speed()}
 
+	// The lap count is read before the position, and the playhead publishes
+	// them in that order, so seeing a new lap guarantees the position has
+	// already wrapped. Reading them the other way round would hand ResumeFrom
+	// a position at the end of the region and stop the new lap ever expiring
+	// anything.
+	laps := r.head.Laps()
+	pos := r.head.Position()
+	out.Position = pos
+
 	// A completed lap is handled before anything from the new one is scored,
 	// so the scoreboard the rule reads is the lap that actually finished.
-	if laps := r.head.Laps(); laps != r.laps {
+	if laps != r.laps {
 		r.laps = laps
 		out.LapDone = true
 		out.LapStats = r.session.Stats()
@@ -124,10 +162,8 @@ func (r *Runner) Update() Update {
 			out.Adjustment, out.Speed = adj, next
 		}
 		r.session.Reset()
+		r.session.ResumeFrom(pos)
 	}
-
-	pos := r.head.Position()
-	out.Position = pos
 
 	for _, d := range r.det.Poll(pos) {
 		out.Fed = append(out.Fed, r.session.Feed(d))
@@ -144,10 +180,11 @@ func (r *Runner) rescope() {
 		r.scoped = r.all
 	}
 	r.session = NewSession(r.scoped, r.cfg.Session)
+	r.session.ResumeFrom(r.head.Position())
 	r.laps = r.head.Laps()
 
 	if r.cfg.Expecter != nil {
-		r.cfg.Expecter.Expect(r.scoped, r.cfg.Session.Windows.Good)
+		r.cfg.Expecter.Expect(r.scoped, r.cfg.Strum)
 	}
 }
 
