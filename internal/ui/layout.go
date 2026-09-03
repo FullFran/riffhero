@@ -132,3 +132,24 @@ func (l Layout) VisibleBars(now practice.Frame, grid practice.Grid) []practice.B
 	}
 	return out
 }
+
+// Band is the vertical space between the header and the footer that a reading
+// is drawn in.
+func (l Layout) Band() (top, bottom float64) {
+	return HeaderHeight + tabMargin, l.Height - FooterHeight - tabMargin
+}
+
+// WithBand re-centres the tab inside a narrower band, which is how it makes
+// room for standard notation above it when both readings are shown.
+func (l Layout) WithBand(top, bottom float64) Layout {
+	spacing := (bottom - top) / 5
+	switch {
+	case spacing > maxStringSpacing:
+		spacing = maxStringSpacing
+	case spacing < minStringSpacing:
+		spacing = minStringSpacing
+	}
+	l.TopString = top + ((bottom-top)-spacing*5)/2
+	l.StringSpacing = spacing
+	return l
+}

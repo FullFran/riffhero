@@ -89,3 +89,42 @@ func TestVisibleWindowNeverGoesNegative(t *testing.T) {
 		t.Fatalf("window start=%d want 0 at song start", from)
 	}
 }
+
+func TestWithBandRecentresTheTab(t *testing.T) {
+	// Showing notation above the tab means the tab gets half the room. It has
+	// to stay inside what it was given: a tab that slides under the staff is
+	// two readings on top of each other rather than one of each.
+	clock := practice.Clock{SampleRate: 48000}
+	l := NewLayout(1000, 900, clock).WithBand(400, 700)
+
+	if got := l.StringY(1); got < 400 {
+		t.Fatalf("the top string is at %v, above the band", got)
+	}
+	if got := l.StringY(6); got > 700 {
+		t.Fatalf("the bottom string is at %v, below the band", got)
+	}
+	if l.StringY(6) <= l.StringY(1) {
+		t.Fatal("the strings are upside down")
+	}
+}
+
+func TestWithBandKeepsATinyBandReadable(t *testing.T) {
+	// Six strings in forty pixels would be four pixels apart; the minimum
+	// spacing wins and the tab overflows rather than becoming a smudge.
+	clock := practice.Clock{SampleRate: 48000}
+	l := NewLayout(1000, 900, clock).WithBand(400, 440)
+	if gap := l.StringY(2) - l.StringY(1); gap < 18 {
+		t.Fatalf("strings %v apart", gap)
+	}
+}
+
+func TestBandSitsBetweenThePanels(t *testing.T) {
+	clock := practice.Clock{SampleRate: 48000}
+	top, bottom := NewLayout(1000, 900, clock).Band()
+	if top <= HeaderHeight {
+		t.Fatalf("the band starts at %v, under the header", top)
+	}
+	if bottom >= 900-FooterHeight {
+		t.Fatalf("the band ends at %v, under the footer", bottom)
+	}
+}
