@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/gen2brain/malgo v0.11.26
-	github.com/hajimehoshi/ebiten/v2 v2.9.10
+	github.com/hajimehoshi/ebiten/v2 v2.9.11
 	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/mewkiz/flac v1.0.14
 )
